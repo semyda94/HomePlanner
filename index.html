@@ -24,6 +24,15 @@
   button.on { background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.15); color: var(--accent); font-weight: 600; }
   button:disabled { opacity: .35; cursor: default; background: transparent; }
   kbd { font: 11px ui-monospace, monospace; color: var(--muted); margin-left: 4px; }
+  /* the Add menu: everything that can be put on the plan, grouped by kind */
+  .menu { position: relative; }
+  .menu .drop { display: none; position: absolute; top: calc(100% + 7px); left: -3px; z-index: 30; min-width: 190px; padding: 6px;
+                background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.16); }
+  .menu.open .drop { display: block; }
+  .menu .drop .sub { margin: 8px 8px 3px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .menu .drop .sub:first-child { margin-top: 3px; }
+  .menu .drop button { display: flex; justify-content: space-between; align-items: center; width: 100%; text-align: left; }
+  .menu .drop button.on { background: var(--accent-soft); box-shadow: none; }
   label.num { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; }
   input[type=number] { width: 64px; font: inherit; padding: 5px 6px; border: 1px solid var(--line);
                        border-radius: 6px; background: #fff; color: var(--ink); }
@@ -104,18 +113,22 @@
   <div class="group" id="floors"></div>
   <div class="group" id="tools">
     <button data-tool="select">Select<kbd>V</kbd></button>
-    <button data-tool="wall">Wall<kbd>W</kbd></button>
-    <button data-tool="door">Door<kbd>D</kbd></button>
-    <button data-tool="window">Window<kbd>N</kbd></button>
-    <button data-tool="stairs">Stairs</button>
-  </div>
-  <div class="group" title="Outdoor areas: click each corner, click the first corner again to close">
-    <button data-tool="backyard">Backyard</button>
-    <button data-tool="deck">Deck</button>
-    <button data-tool="balcony">Balcony</button>
-  </div>
-  <div class="group" title="Furniture catalog: pick a piece, then click on the plan to place it">
-    <button data-tool="furniture">Furniture</button>
+    <div class="menu" id="addMenu">
+      <button id="addBtn" aria-haspopup="true" aria-expanded="false">Add ▾</button>
+      <div class="drop">
+        <div class="sub">Structure</div>
+        <button data-tool="wall">Wall<kbd>W</kbd></button>
+        <button data-tool="door">Door<kbd>D</kbd></button>
+        <button data-tool="window">Window<kbd>N</kbd></button>
+        <button data-tool="stairs">Stairs</button>
+        <div class="sub" title="Click each corner, click the first corner again to close">Outdoor</div>
+        <button data-tool="backyard">Backyard</button>
+        <button data-tool="deck">Deck</button>
+        <button data-tool="balcony">Balcony</button>
+        <div class="sub">Furniture</div>
+        <button data-tool="furniture">Furniture catalog…</button>
+      </div>
+    </div>
   </div>
   <div class="group">
     <button id="undo" title="Ctrl+Z">Undo</button>
@@ -610,6 +623,88 @@ function showFurnProps(f) {
   const fs = props.querySelector('#fsize'); if (fs) fs.onclick = () => { commit(); delete f.w; delete f.d; delete f.h; changed(); showProps(); };
   props.querySelector('.del').onclick = deleteSelection;
 }
+/* Flooring: a room can be laid with carpet, laminate or parquet, as { type, pattern, color } on its tag.
+   Each combination is painted once onto a small repeating tile (a canvas covering mw × mh metres, turned by `angle`),
+   which the plan uses as a fill pattern and the 3D view as a texture. */
+const WOODS = ['#e3cfa9', '#d2b48c', '#c9a877', '#b98b56', '#a9774c', '#8a5a36', '#6f4e37', '#4a3426', '#b9b1a4', '#8f8a82', '#e9e4da', '#2f2a26'];
+const FLOORS = {
+  carpet: { label: 'Carpet', color: '#b9b3a8', patterns: { plain: 'Plain', loop: 'Loop pile', stripe: 'Striped', diamond: 'Diamond' },
+    swatches: ['#e6e0d4', '#cfc8ba', '#b9b3a8', '#9a958c', '#6f6d6a', '#44464a', '#a39480', '#7d6a55', '#8e9a8a', '#5f7366', '#7f8fa3', '#3d4a5c'] },
+  laminate: { label: 'Laminate', color: '#c9a877', patterns: { straight: 'Straight planks', wide: 'Wide planks', diagonal: 'Diagonal' }, swatches: WOODS },
+  parquet: { label: 'Parquet', color: '#a9774c', patterns: { herringbone: 'Herringbone', chevron: 'Chevron', basket: 'Basket weave' }, swatches: WOODS },
+};
+function shade(hex, k) {                             // k < 0 darkens, k > 0 lightens
+  const n = parseInt(hex.slice(1), 16), f = c => Math.round(clamp(k < 0 ? c * (1 + k) : c + (255 - c) * k, 0, 255));
+  return `rgb(${f(n >> 16)},${f(n >> 8 & 255)},${f(n & 255)})`;
+}
+const floorTiles = new Map();
+function floorTile(fl) {
+  const def = FLOORS[fl.type] || FLOORS.carpet, pat = def.patterns[fl.pattern] ? fl.pattern : Object.keys(def.patterns)[0], col = fl.color || def.color;
+  const key = [fl.type, pat, col, fl.turn ? 1 : 0].join('|');
+  if (floorTiles.has(key)) return floorTiles.get(key);
+  let seed = 11; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const cv = document.createElement('canvas'), g = cv.getContext('2d'), t = { cv, mw: 1, mh: 1, angle: 0 };
+  const size = (mw, pw, ph = pw) => { t.mw = mw; t.mh = mw * ph / pw; cv.width = pw; cv.height = ph; return pw / mw; };   // returns px per metre
+  // One board (metres), grain along its longer side. It is repeated across the tile edges so the tile joins up with itself.
+  const board = (K, x, y, w, h) => {
+    const tone = shade(col, (rnd() - 0.5) * 0.24), grain = [rnd(), rnd(), rnd(), rnd()], seam = shade(col, -0.5);
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) {
+      const X = (x + dx * t.mw) * K, Y = (y + dy * t.mh) * K, W = w * K, H = h * K;
+      if (X + W < 0 || Y + H < 0 || X > cv.width || Y > cv.height) continue;
+      g.fillStyle = tone; g.fillRect(X, Y, W, H);
+      g.strokeStyle = 'rgba(0,0,0,.07)'; g.lineWidth = 1; g.beginPath();
+      for (const q of grain) { if (W >= H) { g.moveTo(X, Y + q * H); g.lineTo(X + W, Y + q * H); } else { g.moveTo(X + q * W, Y); g.lineTo(X + q * W, Y + H); } }
+      g.stroke();
+      g.strokeStyle = seam; g.lineWidth = Math.max(1, K * 0.004); g.strokeRect(X, Y, W, H);
+    }
+  };
+  const speckle = (n, a) => { for (let i = 0; i < n; i++) { g.fillStyle = `rgba(${rnd() < 0.5 ? '0,0,0' : '255,255,255'},${a})`; g.fillRect(rnd() * cv.width | 0, rnd() * cv.height | 0, 2, 2); } };
+  if (fl.type === 'laminate') {
+    const K = size(2.4, 1024), pw = pat === 'wide' ? 0.3 : 0.2, len = 1.2;           // click-together planks in staggered rows
+    for (let i = 0; i < 2.4 / pw; i++) for (let k = 0; k < 2; k++) board(K, (i * 0.45) % len + k * len, i * pw, len, pw);
+    if (pat === 'diagonal') t.angle = Math.PI / 4;
+  } else if (fl.type === 'parquet' && pat === 'herringbone') {
+    const w = 0.09, m = 5, l = w * m, K = size(2 * l, 512);                          // blocks in L-shaped pairs stepping down a diagonal
+    for (let i = 0; i < 2 * m; i++) { board(K, i * w, -i * w, l, w); board(K, i * w + l, -i * w, w, l); }
+    t.angle = Math.PI / 4;
+  } else if (fl.type === 'parquet' && pat === 'chevron') {
+    const K = size(0.8, 512), c = 0.4 * K, sp = 512 / 6;                             // two mirrored columns of slanted blocks
+    for (let colm = 0; colm < 2; colm++) for (let n = -1; n < 6 + 4; n++) {
+      const y0 = n * sp, x0 = colm * c, up = colm ? 1 : -1, a = colm ? y0 - c : y0, b = colm ? y0 : y0 - c;
+      g.fillStyle = shade(col, [-0.1, 0.07, -0.03, 0.11, 0.02, -0.07, 0.04, -0.09, 0.1, -0.05, 0.08, -0.02][colm * 6 + ((n % 6) + 6) % 6]);   // tone repeats with the tile
+      g.beginPath(); g.moveTo(x0, a); g.lineTo(x0 + c, b); g.lineTo(x0 + c, b + sp); g.lineTo(x0, a + sp); g.closePath(); g.fill();
+      g.strokeStyle = shade(col, -0.5); g.lineWidth = 1.5; g.stroke();
+    }
+  } else if (fl.type === 'parquet') {
+    const l = 0.3, K = size(2 * l, 512), n = 3;                                      // squares of three strips, turned alternately
+    for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) for (let i = 0; i < n; i++)
+      (a + b) % 2 ? board(K, a * l + i * l / n, b * l, l / n, l) : board(K, a * l, b * l + i * l / n, l, l / n);
+  } else {
+    size(0.5, 256); g.fillStyle = col; g.fillRect(0, 0, 256, 256);
+    if (pat === 'stripe') for (let i = 0; i < 8; i += 2) { g.fillStyle = shade(col, -0.12); g.fillRect(i * 32, 0, 32, 256); }
+    if (pat === 'loop') for (let y = 0; y < 256; y += 8) for (let x = 0; x < 256; x += 8) {
+      g.fillStyle = shade(col, (x + y) / 8 % 2 ? -0.14 : 0.1); g.beginPath(); g.arc(x + 4, y + 4, 3, 0, 7); g.fill(); }
+    if (pat === 'diamond') { g.strokeStyle = shade(col, -0.22); g.lineWidth = 3; g.beginPath();
+      for (let k = -2; k <= 2; k++) { g.moveTo(k * 128, 0); g.lineTo(k * 128 + 256, 256); g.moveTo(k * 128 + 256, 0); g.lineTo(k * 128, 256); } g.stroke(); }
+    speckle(9000, 0.07);
+  }
+  if (fl.turn) t.angle += Math.PI / 2;               // laid across the room instead of along it
+  floorTiles.set(key, t); return t;
+}
+function floorPattern(fl) {                          // fill style for the plan, tied to plan metres
+  const t = floorTile(fl); t.pat ||= ctx.createPattern(t.cv, 'repeat');
+  t.pat.setTransform(new DOMMatrix().translate(view.ox, view.oy).scale(view.s).rotate(t.angle * 180 / Math.PI).scale(t.mw / t.cv.width, t.mh / t.cv.height));
+  return t.pat;
+}
+function floorTexMat(fl) {                           // material for the 3D floor; the floor's UVs are plan metres
+  const t = floorTile(fl);
+  if (!t.mat) {
+    const tex = new THREE.CanvasTexture(t.cv); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(1 / t.mw, 1 / t.mh);
+    tex.rotation = t.angle; tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+    t.mat = new THREE.MeshStandardMaterial({ map: tex, roughness: fl.type === 'carpet' ? 1 : 0.55, side: THREE.DoubleSide });
+  }
+  return t.mat;
+}
 function areaVertexHit(p) { const a = selArea(); return a && a.pts.find(v => dist(p, v) < px(9)); }
 
 const toS = p => ({ x: p.x * view.s + view.ox, y: p.y * view.s + view.oy });
@@ -654,11 +749,21 @@ function hitTest(p) {
 }
 const endpointsAt = keys => S.walls.flatMap(w => [w.a, w.b]).filter(e => keys.includes(key(e)));
 
+const TOOL_NAMES = { wall: 'Wall', door: 'Door', window: 'Window', stairs: 'Stairs', backyard: 'Backyard', deck: 'Deck', balcony: 'Balcony', furniture: 'Furniture' };
+function openAdd(open) {
+  const m = document.getElementById('addMenu'); m.classList.toggle('open', open);
+  document.getElementById('addBtn').setAttribute('aria-expanded', open);
+}
+document.getElementById('addBtn').onclick = () => openAdd(!document.getElementById('addMenu').classList.contains('open'));
+document.addEventListener('pointerdown', e => { if (!e.target.closest('#addMenu')) openAdd(false); });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') openAdd(false); });
 function setTool(t) {
   const cat = (tool === 'furniture') !== (t === 'furniture');   // the catalog panel opens / closes with the Furniture tool
   tool = t; chain = null; poly = null;
   if (cat) { furnKind = null; if (t === 'furniture') sel = null; showProps(); }
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  const ab = document.getElementById('addBtn');        // the Add button shows what is being added
+  ab.textContent = t === 'select' ? 'Add ▾' : `Add: ${TOOL_NAMES[t]} ▾`; ab.classList.toggle('on', t !== 'select'); openAdd(false);
   document.getElementById('hint').innerHTML = HINTS[t];
   cv.style.cursor = t === 'select' ? 'default' : 'crosshair';
   draw();
@@ -876,7 +981,7 @@ function draw() {
   }
   const picked = selectedRoom();
   rooms.forEach(r => {
-    ctx.fillStyle = r.color; ctx.beginPath();
+    ctx.fillStyle = r.meta?.floor ? floorPattern(r.meta.floor) : r.color; ctx.beginPath();
     r.poly.forEach((p, j) => { const s = toS(p); j ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
     ctx.closePath(); ctx.fill();
     if (r === picked) {
@@ -978,12 +1083,22 @@ function showRoomProps(room) {
   const openOf = k => items.filter(i => i.kind === k && !i.done).length;
   const ideas = L.ideas.filter(t => !shown.some(i => i.text === t));
   const cost = listTab === 'buy' ? costLeft(shown) : 0;
+  const fl = room.meta?.floor && FLOORS[room.meta.floor.type] ? room.meta.floor : null;
   props.innerHTML = `<h4>Room · ${room.area.toFixed(1)} m²</h4>
     <div class="chips" style="margin:0 0 8px"><button id="povBtn" title="Put the camera in the middle of this room, at eye height">Stand inside this room (POV)</button></div>
     <input type="text" id="rname" placeholder="Name, e.g. Kitchen" maxlength="40">
     <div class="chips">${ROOM_TYPES.map(t => `<button data-name="${t}" class="${t === room.name ? 'on' : ''}">${t}</button>`).join('')}</div>
     <div class="sub">Color</div>
     ${colorPicker(SWATCHES, room.color)}
+    <div class="sub">Flooring</div>
+    <div class="chips" style="margin-top:0"><button data-floor-type="" class="${fl ? '' : 'on'}">None</button>${Object.entries(FLOORS).map(([k, d]) =>
+      `<button data-floor-type="${k}" class="${fl?.type === k ? 'on' : ''}">${d.label}</button>`).join('')}</div>
+    ${fl ? `<div class="sub">Pattern</div><div class="chips" style="margin-top:0">${Object.entries(FLOORS[fl.type].patterns).map(([k, v]) =>
+        `<button data-floor-pat="${k}" class="${fl.pattern === k ? 'on' : ''}">${v}</button>`).join('')}</div>
+      <div class="chips"><button id="fturn" class="${fl.turn ? 'on' : ''}" title="Lay the flooring the other way">Turn 90°</button></div>
+      <div class="sub">${FLOORS[fl.type].label} color</div>
+      <div class="swatches">${FLOORS[fl.type].swatches.map(c => `<button data-fcolor="${c}" title="${c}" style="background:${c}" class="${c === fl.color ? 'on' : ''}"></button>`).join('')}
+        <label class="custom" title="Custom color"><input type="color" id="fcustom" value="${fl.color}">+</label></div>` : ''}
     <div class="sub">Planner</div>
     <div class="chips" style="margin-top:0">${Object.entries(LISTS).map(([k, v]) =>
       `<button data-tab="${k}" class="${k === listTab ? 'on' : ''}">${v.label}${openOf(k) ? ' (' + openOf(k) + ')' : ''}</button>`).join('')}</div>
@@ -1022,6 +1137,15 @@ function showRoomProps(room) {
   props.querySelectorAll('[data-name]').forEach(b => b.onclick = () => edit('name', b.dataset.name, true));
   props.querySelectorAll('[data-color]').forEach(b => b.onclick = () => edit('color', b.dataset.color, true));
   bindSaved(props);
+  props.querySelectorAll('[data-floor-type]').forEach(b => b.onclick = () => {   // a new type starts with its first pattern and usual colour
+    const d = FLOORS[b.dataset.floorType];
+    edit('floor', d ? { type: b.dataset.floorType, pattern: Object.keys(d.patterns)[0], color: d.color } : undefined, true);
+  });
+  props.querySelectorAll('[data-floor-pat]').forEach(b => b.onclick = () => edit('floor', { ...fl, pattern: b.dataset.floorPat }, true));
+  props.querySelectorAll('[data-fcolor]').forEach(b => b.onclick = () => edit('floor', { ...fl, color: b.dataset.fcolor }, true));
+  const ft = props.querySelector('#fturn'); if (ft) ft.onclick = () => edit('floor', { ...fl, turn: !fl.turn }, true);
+  const fc = props.querySelector('#fcustom');
+  if (fc) { fc.oninput = () => edit('floor', { ...fl, color: fc.value }); fc.onchange = () => showProps(); }
 }
 // Whole-house view of every room's lists (the "Lists" button in the toolbar).
 const listsEl = document.getElementById('lists'), listsBtn = document.getElementById('listsBtn');
@@ -1365,7 +1489,7 @@ function buildFloor(S, rooms, level, below) {
       if (well.every(p => inside(p, r.poly))) shape.holes.push(new THREE.Path(well.map(p => new THREE.Vector2(p.x, p.y))));
     const g = level ? new THREE.ExtrudeGeometry(shape, { depth: SLAB, bevelEnabled: false }) : new THREE.ShapeGeometry(shape);
     g.rotateX(Math.PI / 2);                            // upper floors get a slab that hangs below floor level
-    const m = new THREE.Mesh(g, floorMat(r.color)); m.position.y = 0.01; m.receiveShadow = true; m.castShadow = !!level; model.add(m);
+    const m = new THREE.Mesh(g, r.meta?.floor ? floorTexMat(r.meta.floor) : floorMat(r.color)); m.position.y = 0.01; m.receiveShadow = true; m.castShadow = !!level; model.add(m);
   });
   if (pov && pov.floor === level) {                    // standing inside: every room of this floor gets its ceiling
     const up = (S.stairs || []).map(st => stairWell(st, H + SLAB));

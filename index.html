@@ -1516,7 +1516,7 @@ function buildFloor(S, rooms, level, below) {
       const shape = new THREE.Shape(r.poly.map(p => new THREE.Vector2(p.x, p.y)));
       for (const well of up) if (well.every(p => inside(p, r.poly))) shape.holes.push(new THREE.Path(well.map(p => new THREE.Vector2(p.x, p.y))));
       const g = new THREE.ShapeGeometry(shape); g.rotateX(Math.PI / 2);
-      const m = new THREE.Mesh(g, CEILING); m.position.y = H - 0.003; model.add(m);
+      const m = new THREE.Mesh(g, CEILING); m.position.y = H - 0.003; m.castShadow = true; model.add(m);   // shuts the sun out: daylight only comes in through glass and doorways
     });
   }
   for (const w of S.walls) {
@@ -1747,7 +1747,7 @@ function showProps3() {
    Walls stop you, doorways let you through. Orbit controls are parked until you leave. */
 const CEILING = new THREE.MeshStandardMaterial({ color: '#f7f5ef', roughness: 1, side: THREE.DoubleSide });
 const POV_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'], povKeys = new Set(), EYE = 1.6;
-const povLamp = new THREE.PointLight('#fff6e8', 0, 14, 1.2); scene.add(povLamp);   // a soft lamp at the eye: ceilings shut the sky light out
+const povLamp = new THREE.PointLight('#fff6e8', 0, 14, 1.2); scene.add(povLamp);   // a faint fill light at the eye, standing in for light bounced around the room
 let pov = null, povBack = null, look = null;       // pov: { floor, x, z, yaw, pitch }
 const pane3d = document.getElementById('pane3d');
 function enterPov(room) {
@@ -1756,7 +1756,7 @@ function enterPov(room) {
   pov = { floor: P.active, x: room.c.x, z: room.c.y, yaw: wide ? -Math.PI / 2 : Math.PI, pitch: 0 };   // look down the room's long side
   if (document.body.classList.contains('only2d')) setView('split');
   controls.enabled = false; camera.fov = 72; camera.near = 0.03; camera.updateProjectionMatrix(); camera.rotation.order = 'YXZ';
-  pane3d.classList.add('pov'); povKeys.clear(); povLamp.intensity = 2.2; dirty3d = true;
+  pane3d.classList.add('pov'); povKeys.clear(); povLamp.intensity = 0.6; dirty3d = true;
 }
 function exitPov() {
   if (!pov) return;

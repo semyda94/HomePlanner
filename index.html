@@ -923,6 +923,8 @@ function drawOpening(o, selected) {
     ctx.strokeStyle = selected ? c : '#3b82c4';
     ctx.beginPath(); ctx.moveTo(p0.x + nx, p0.y + ny); ctx.lineTo(p1.x + nx, p1.y + ny); ctx.lineTo(p1.x - nx, p1.y - ny);
     ctx.lineTo(p0.x - nx, p0.y - ny); ctx.closePath(); ctx.stroke(); line(p0, p1);
+  } else if (o.style === 'open') {                     // bare doorway: only the threshold, dashed
+    ctx.setLineDash([4, 4]); line(p0, p1); ctx.setLineDash([]);
   } else if (o.width > 1.8) { line(p0, p1);            // garage-size door: drawn closed
   } else {
     const r = o.width * view.s, a = Math.atan2(uy, ux), atB = o.hinge === 'b', sw = o.swing === -1 ? -1 : 1;
@@ -1180,7 +1182,7 @@ listsBtn.onclick = () => { listsOpen = !listsOpen; renderLists(); };
 
 const RAIL_STYLES = { bars: 'Open railing', glass: 'Glass', solid: 'Clad wall' };
 const railStyle = a => a.railStyle || (a.type === 'balcony' ? 'glass' : 'bars');
-const DOOR_STYLES = { hinged: 'Hinged', glass: 'Glass slider', garage: 'Garage door' };
+const DOOR_STYLES = { hinged: 'Hinged', glass: 'Glass slider', garage: 'Garage door', open: 'Open (no door)' };   // open = a bare doorway
 // What a door on "Auto" turns into: a wide door in an outside wall is a glass slider, anything else is hinged.
 function doorOuter(fi, o) {
   const f = P.floors[fi], w = f.walls.find(x => x.id === o.wallId);
@@ -1198,12 +1200,12 @@ function doorControls(fi, o) {
   return `<div class="sub">Type</div>
     <div class="chips" style="margin-top:0"><button data-style="" class="${o.style ? '' : 'on'}">Auto</button>${Object.entries(DOOR_STYLES).map(([k, v]) =>
       `<button data-style="${k}" class="${k === o.style ? 'on' : ''}">${v}</button>`).join('')}</div>`
-    + (style === 'garage' ? '' : `<div class="sub">Opening</div><div class="chips" style="margin-top:0">
+    + (style === 'open' ? '' : (style === 'garage' ? '' : `<div class="sub">Opening</div><div class="chips" style="margin-top:0">
       <button data-flip="hinge">${style === 'glass' ? 'Slide from other end' : 'Hinge on other side'}</button>
       ${style === 'hinged' ? '<button data-flip="swing">Open the other way</button>' : ''}</div>`)
     + `<div class="sub">${style === 'glass' ? 'Frame color' : 'Color'}</div>
     ${colorPicker(DOOR_SWATCHES, doorColor(fi, o))}
-    ${o.color ? '<div class="chips"><button data-color="">Reset to default color</button></div>' : ''}`;
+    ${o.color ? '<div class="chips"><button data-color="">Reset to default color</button></div>' : ''}`);
 }
 function bindDoorControls(el, o, done) {
   el.querySelectorAll('[data-style]').forEach(b => b.onclick = () => {
@@ -1543,6 +1545,7 @@ function buildFloor(S, rooms, level, below) {
           if (!ext[sign > 0 ? 0 : 1].some(r => (s + e) / 2 > r.a && (s + e) / 2 < r.b)) continue;
           const sill = box(g, M.trim, s - 0.04, e + 0.04, bot - 0.04, bot, 0.06); if (sill) sill.position.z = sign * (T / 2 + 0.04);
         }
+      } else if (style === 'open') {                      // bare doorway: nothing hangs in it
       } else if (style === 'glass') {                     // glazed slider: fixed panels with one leaf slid open
         const n = Math.max(2, Math.round((e - s) / 0.9)), pw = (e - s) / n;
         const fm = dc || M.frame;

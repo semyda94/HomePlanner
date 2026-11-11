@@ -515,7 +515,8 @@ function drawStair(st, rise, mode) {               // mode: 'ghost' (floor below
 }
 /* Furniture: pieces from the catalog, placed on a floor as { id, kind, x, y, rot, w?, d?, h? } (x, y = centre; rot in degrees).
    A catalog entry gives the size in metres (w across, d front to back, h tall), the boxes of its 3D model as
-   [x, y0, z, w, h, d, color] (x/z = centre, y0 = underside, +z = front) and the rectangles drawn on the plan as [x, z, w, d]. */
+   [x, y0, z, w, h, d, color, turn?, tilt?] (x/z = centre, y0 = underside, +z = front; turn = spin about the vertical, tilt = lean
+   back, both in radians) and the rectangles drawn on the plan as [x, z, w, d]. */
 const alexUnit = x => {                              // IKEA ALEX drawer unit, 36 × 58 × 70 cm, dark grey, five drawers
   const out = [[x, 0, -0.01, 0.36, 0.70, 0.56, '#46494e']];
   let y = 0.01; for (const h of [0.19, 0.19, 0.1, 0.1, 0.1]) { out.push([x, y, 0.28, 0.352, h - 0.006, 0.02, '#53565c']); y += h; }
@@ -548,6 +549,22 @@ const FURN = {
   table: { group: 'Living', label: 'Dining table', short: 'Table', w: 1.6, d: 0.9, h: 0.75,
     parts: [[0, 0.71, 0, 1.6, 0.04, 0.9, OAK], ...[[-0.74, -0.39], [0.74, -0.39], [-0.74, 0.39], [0.74, 0.39]].map(([x, z]) => [x, 0, z, 0.06, 0.71, 0.06, OAK])] },
 };
+// Racing-style gaming chair, sized after the Secretlab Titan (regular): tall winged back, bolstered seat, 4D armrests, five-star base.
+FURN.gaming = (() => {
+  const BLK = '#1c1d21', GREY = '#3b3d44', MET = '#2b2c31', lean = -0.1, parts = [];
+  for (let i = 0; i < 5; i++) {                      // five-star base with castors
+    const a = Math.PI / 2 + i * Math.PI * 2 / 5, c = Math.cos(a), sn = Math.sin(a);
+    parts.push([0.17 * c, 0.05, 0.17 * sn, 0.34, 0.035, 0.06, MET, -a], [0.32 * c, 0, 0.32 * sn, 0.055, 0.055, 0.055, BLK, -a]);
+  }
+  parts.push([0, 0.085, 0, 0.06, 0.34, 0.06, MET],                                                   // gas lift
+    [0, 0.42, 0.02, 0.52, 0.11, 0.5, BLK], [-0.235, 0.435, 0.02, 0.05, 0.11, 0.48, GREY], [0.235, 0.435, 0.02, 0.05, 0.11, 0.48, GREY],   // seat and its bolsters
+    [0, 0.52, -0.25, 0.5, 0.82, 0.09, BLK, 0, lean], [0, 0.9, -0.262, 0.56, 0.36, 0.085, BLK, 0, lean],   // back and shoulder wings
+    [-0.19, 0.52, -0.2, 0.04, 0.82, 0.012, GREY, 0, lean], [0.19, 0.52, -0.2, 0.04, 0.82, 0.012, GREY, 0, lean],   // side stripes
+    [0, 1.14, -0.165, 0.3, 0.14, 0.07, GREY, 0, lean], [0, 0.6, -0.185, 0.34, 0.16, 0.07, GREY, 0, lean]);   // head and lumbar pillows
+  for (const x of [-0.3, 0.3]) parts.push([x, 0.44, 0, 0.04, 0.21, 0.06, MET], [x, 0.65, 0.03, 0.09, 0.035, 0.26, BLK]);   // armrests
+  return { group: 'Office', label: 'Gaming chair (Secretlab Titan style)', short: 'Chair', w: 0.7, d: 0.7, h: 1.34, parts,
+    plan: [[0, 0.02, 0.52, 0.5], [0, -0.25, 0.56, 0.09], [-0.3, 0.03, 0.09, 0.26], [0.3, 0.03, 0.09, 0.26]] };
+})();
 // SpecRite walnut timber slat acoustic panel, 2400 × 600 × 21 mm: veneer battens on black acoustic felt.
 // `wall: true` pieces hang on a wall: they snap flat against the nearest wall face when placed or dragged.
 FURN.slat = { group: 'Wall panels', label: 'SpecRite walnut slat acoustic panel', short: 'Slats', w: 0.6, d: 0.021, h: 2.4, wall: true,
@@ -1648,9 +1665,9 @@ function buildFloor(S, rooms, level, below) {
     for (const f of S.furniture || []) {
       const def = FURN[f.kind]; if (!def) continue;
       const z = furnSize(f), fg = new THREE.Group(), picked = level === P.active && !!sel && sel.type === 'furn' && sel.id === f.id;
-      for (const [x, y, zz, w, h, d, color] of def.parts) {
+      for (const [x, y, zz, w, h, d, color, turn = 0, tilt = 0] of def.parts) {
         const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), picked ? glow(doorMat(color)) : doorMat(color));
-        m.position.set(x, y + h / 2, zz); m.castShadow = m.receiveShadow = true; fg.add(m);
+        m.position.set(x, y + h / 2, zz); m.rotation.set(tilt, turn, 0); m.castShadow = m.receiveShadow = true; fg.add(m);
       }
       fg.scale.set(z.w / def.w, z.h / def.h, z.d / def.d);
       fg.position.set(f.x, 0.002, f.y); fg.rotation.y = -f.rot * Math.PI / 180;   // plan y runs along 3D z, so the turn is mirrored

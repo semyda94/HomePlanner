@@ -62,6 +62,12 @@
   .swatches .custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   .swatches .none { font-size: 12px; color: var(--muted); line-height: 24px; }
   .chips button.warn { color: #b3261e; }
+  #povBar { display: none; position: absolute; top: 10px; left: 10px; right: 90px; align-items: center; gap: 10px; flex-wrap: wrap; z-index: 2; }
+  #pane3d.pov #povBar { display: flex; }
+  #povBar button { background: var(--accent); color: #fff; font-weight: 600; padding: 7px 12px; }
+  #povBar span { font-size: 12px; background: rgba(255,255,255,.85); padding: 4px 8px; border-radius: 6px; }
+  #pane3d.pov .hint > span:first-child, #pane3d.pov #allFloors, #pane3d.pov #fit { visibility: hidden; }
+  #pane3d.pov canvas { cursor: grab; }
   .flist button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; margin-bottom: 4px; padding: 6px 9px; text-align: left; background: var(--bg); }
   .flist button.on { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
   .flist small { font-size: 11px; color: var(--muted); }
@@ -142,6 +148,7 @@
   <div class="pane" id="pane3d">
     <canvas id="view3d"></canvas>
     <div class="tag">3D model</div>
+    <div id="povBar"><button id="povExit">✕ Exit room view</button><span>Drag to look · <b>W A S D</b> or arrow keys to walk · scroll to step · <b>Esc</b> to exit</span></div>
     <div class="hint"><span>Drag to orbit · right-drag to pan · scroll to zoom</span>
       <span style="pointer-events:auto"><button id="allFloors" style="background:#fff" title="Switch between all floors and only up to the floor being edited">Showing up to this floor</button> <button id="fit" style="background:#fff">Reset view</button></span></div>
   </div>
@@ -774,6 +781,10 @@ function deleteSelection() {
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
+  if (pov && !e.ctrlKey && !e.metaKey) {               // inside a room: the keys walk, Esc leaves
+    if (k === 'escape') exitPov(); else if (POV_KEYS.includes(k)) { povKeys.add(k); e.preventDefault(); }
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? restore(redoStack, undoStack) : restore(undoStack, redoStack); }
   else if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); restore(redoStack, undoStack); }
   else if (e.ctrlKey || e.metaKey) return;
@@ -968,6 +979,7 @@ function showRoomProps(room) {
   const ideas = L.ideas.filter(t => !shown.some(i => i.text === t));
   const cost = listTab === 'buy' ? costLeft(shown) : 0;
   props.innerHTML = `<h4>Room · ${room.area.toFixed(1)} m²</h4>
+    <div class="chips" style="margin:0 0 8px"><button id="povBtn" title="Put the camera in the middle of this room, at eye height">Stand inside this room (POV)</button></div>
     <input type="text" id="rname" placeholder="Name, e.g. Kitchen" maxlength="40">
     <div class="chips">${ROOM_TYPES.map(t => `<button data-name="${t}" class="${t === room.name ? 'on' : ''}">${t}</button>`).join('')}</div>
     <div class="sub">Color</div>
@@ -981,6 +993,7 @@ function showRoomProps(room) {
       ${listTab === 'buy' ? '<input type="number" id="iprice" placeholder="Price" min="0" step="1">' : ''}<button id="ibtn">Add</button></div>
     <div class="chips">${ideas.map(t => `<button data-idea="${t}">+ ${t}</button>`).join('')}</div>`;
   props.style.display = 'block';
+  props.querySelector('#povBtn').onclick = () => enterPov(room);
   const setItems = fn => { edit('items', fn(roomMeta(room).items || []), true); };
   const add = text => {
     text = text.trim(); if (!text) return;
@@ -1354,6 +1367,15 @@ function buildFloor(S, rooms, level, below) {
     g.rotateX(Math.PI / 2);                            // upper floors get a slab that hangs below floor level
     const m = new THREE.Mesh(g, floorMat(r.color)); m.position.y = 0.01; m.receiveShadow = true; m.castShadow = !!level; model.add(m);
   });
+  if (pov && pov.floor === level) {                    // standing inside: every room of this floor gets its ceiling
+    const up = (S.stairs || []).map(st => stairWell(st, H + SLAB));
+    rooms.forEach(r => {
+      const shape = new THREE.Shape(r.poly.map(p => new THREE.Vector2(p.x, p.y)));
+      for (const well of up) if (well.every(p => inside(p, r.poly))) shape.holes.push(new THREE.Path(well.map(p => new THREE.Vector2(p.x, p.y))));
+      const g = new THREE.ShapeGeometry(shape); g.rotateX(Math.PI / 2);
+      const m = new THREE.Mesh(g, CEILING); m.position.y = H - 0.003; model.add(m);
+    });
+  }
   for (const w of S.walls) {
     const L = wlen(w); if (L < 0.01) continue;
     const g = new THREE.Group();
@@ -1577,17 +1599,83 @@ function showProps3() {
   bindSaved(props3);
   props3.querySelector('.del').onclick = () => paint(null, true);
 }
+/* Room view (POV): the camera stands inside a room at eye height; drag looks around, the keys walk.
+   Walls stop you, doorways let you through. Orbit controls are parked until you leave. */
+const CEILING = new THREE.MeshStandardMaterial({ color: '#f7f5ef', roughness: 1, side: THREE.DoubleSide });
+const POV_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'], povKeys = new Set(), EYE = 1.6;
+const povLamp = new THREE.PointLight('#fff6e8', 0, 14, 1.2); scene.add(povLamp);   // a soft lamp at the eye: ceilings shut the sky light out
+let pov = null, povBack = null, look = null;       // pov: { floor, x, z, yaw, pitch }
+const pane3d = document.getElementById('pane3d');
+function enterPov(room) {
+  const xs = room.poly.map(p => p.x), ys = room.poly.map(p => p.y), wide = Math.max(...xs) - Math.min(...xs) > Math.max(...ys) - Math.min(...ys);
+  if (!pov) povBack = { pos: camera.position.clone(), target: controls.target.clone() };
+  pov = { floor: P.active, x: room.c.x, z: room.c.y, yaw: wide ? -Math.PI / 2 : Math.PI, pitch: 0 };   // look down the room's long side
+  if (document.body.classList.contains('only2d')) setView('split');
+  controls.enabled = false; camera.fov = 72; camera.near = 0.03; camera.updateProjectionMatrix(); camera.rotation.order = 'YXZ';
+  pane3d.classList.add('pov'); povKeys.clear(); povLamp.intensity = 2.2; dirty3d = true;
+}
+function exitPov() {
+  if (!pov) return;
+  pov = null; look = null; povKeys.clear(); pane3d.classList.remove('pov'); povLamp.intensity = 0;
+  camera.fov = 45; camera.near = 0.1; camera.updateProjectionMatrix();
+  camera.position.copy(povBack.pos); controls.target.copy(povBack.target); controls.enabled = true; controls.update();
+  dirty3d = true;
+}
+document.getElementById('povExit').onclick = exitPov;
+window.addEventListener('keyup', e => povKeys.delete(e.key.toLowerCase()));
+window.addEventListener('blur', () => povKeys.clear());
+// Too close to a wall to stand there? Doorways are open.
+function povBlocked(f, x, z) {
+  for (const w of f.walls) {
+    const L = wlen(w); if (L < 0.01) continue;
+    const q = proj({ x, y: z }, w.a, w.b); if (q.d > f.thickness / 2 + 0.2) continue;
+    const along = q.t * L;
+    if (!f.openings.some(o => o.wallId === w.id && o.type === 'door' && Math.abs(along - o.pos) < o.width / 2 - 0.15)) return true;
+  }
+  return false;
+}
+function povMove(dx, dz) {                           // slides along a wall instead of stopping dead
+  const f = P.floors[pov.floor], free = (x, z) => povBlocked(f, pov.x, pov.z) || !povBlocked(f, x, z);
+  if (free(pov.x + dx, pov.z + dz)) { pov.x += dx; pov.z += dz; }
+  else if (free(pov.x + dx, pov.z)) pov.x += dx;
+  else if (free(pov.x, pov.z + dz)) pov.z += dz;
+}
+function povStep(dt) {
+  if (!P.floors[pov.floor] || pov.floor > P.active && !showAll) return exitPov();
+  const has = (...k) => k.some(x => povKeys.has(x)) ? 1 : 0;
+  const fwd = has('w', 'arrowup') - has('s', 'arrowdown'), side = has('d', 'arrowright') - has('a', 'arrowleft');
+  if (fwd || side) {
+    const sn = Math.sin(pov.yaw), cs = Math.cos(pov.yaw), v = 1.8 * dt / Math.hypot(fwd, side);
+    povMove((-sn * fwd + cs * side) * v, (-cs * fwd - sn * side) * v);
+  }
+  let base = 0; for (let i = 0; i < pov.floor; i++) base += P.floors[i].height + SLAB;
+  camera.position.set(pov.x, base + Math.min(EYE, P.floors[pov.floor].height - 0.3), pov.z);
+  camera.rotation.set(pov.pitch, pov.yaw, 0); povLamp.position.copy(camera.position);
+}
+c3.addEventListener('pointerdown', e => { if (pov && e.button === 0) { look = { x: e.clientX, y: e.clientY, yaw: pov.yaw, pitch: pov.pitch }; c3.setPointerCapture(e.pointerId); } });
+c3.addEventListener('pointermove', e => {
+  if (!pov || !look) return;
+  pov.yaw = look.yaw + (e.clientX - look.x) * 0.005; pov.pitch = clamp(look.pitch + (e.clientY - look.y) * 0.005, -1.3, 1.3);
+});
+c3.addEventListener('pointerup', () => { look = null; });
+c3.addEventListener('wheel', e => {
+  if (!pov) return;
+  e.preventDefault(); const d = clamp(-e.deltaY * 0.003, -0.5, 0.5); povMove(-Math.sin(pov.yaw) * d, -Math.cos(pov.yaw) * d);
+}, { passive: false });
 function updateSun() {
   const b = bounds(), d = b.size * 0.9 + 4;
   sun.position.set(b.cx + d * 0.6, d * 1.4, b.cy + d * 0.45); sun.target.position.set(b.cx, 0, b.cy);
   Object.assign(sun.shadow.camera, { left: -d, right: d, top: d, bottom: -d, near: 0.5, far: d * 4 });
   sun.shadow.camera.updateProjectionMatrix();
 }
+let lastFrame = performance.now();
 (function loop() {
   requestAnimationFrame(loop);
   if (!c3.clientWidth) return;
   if (dirty3d) build3D();
-  controls.update(); renderer.render(scene, camera);
+  const now = performance.now(), dt = Math.min(0.05, (now - lastFrame) / 1000); lastFrame = now;
+  if (pov) povStep(dt); else controls.update();
+  renderer.render(scene, camera);
 })();
 
 /* ------------------------------------------------------------------ glue */
@@ -1618,6 +1706,7 @@ function setView(v) {
 }
 /* ---------------------------------------------------------------- floors */
 function setFloor(i) {
+  if (pov) exitPov();
   P.active = i; S = P.floors[i]; sel = null; chain = null; poly = null;
   changed(); showProps(); syncInputs();
 }

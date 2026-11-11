@@ -38,17 +38,20 @@
   .hint { position: absolute; left: 12px; bottom: 10px; right: 12px; display: flex; justify-content: space-between;
           gap: 12px; font-size: 12px; color: var(--muted); pointer-events: none; }
   .hint b { color: var(--ink); font-weight: 600; }
-  #props { position: absolute; top: 10px; left: 12px; background: var(--panel); border: 1px solid var(--line);
-           border-radius: 10px; padding: 10px 12px; box-shadow: 0 4px 14px rgba(0,0,0,.08); display: none;
-           min-width: 190px; }
-  #props h4 { margin: 0 0 8px; font-size: 13px; }
-  #props .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 5px 0;
+  /* side panels: #props (left of the 2D plan) for the object selected there, #props3d (right of the 3D model) for the wall picked there */
+  .sidep { flex: 0 0 min(290px, 30%); min-width: 0; min-height: 0; box-sizing: border-box; background: var(--panel);
+           padding: 14px 14px 20px; display: none; overflow: auto; }
+  #props { border-right: 1px solid var(--line); }
+  #props3d { border-left: 1px solid var(--line); }
+  body.only3d #props, body.only2d #props3d { display: none !important; }
+  .sidep h4 { margin: 0 0 8px; font-size: 13px; }
+  .sidep .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 5px 0;
                 color: var(--muted); font-size: 13px; }
-  #props button.del { margin-top: 6px; width: 100%; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  #props { max-width: 270px; max-height: calc(100% - 20px); overflow: auto; z-index: 2; }
-  #props label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-  #props input[type=text] { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); }
-  #props .sub { margin: 10px 0 5px; font-size: 12px; color: var(--muted); }
+  .sidep button.del { margin-top: 6px; width: 100%; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .sidep .plist { max-height: none; }
+  .sidep label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .sidep input[type=text] { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); }
+  .sidep .sub { margin: 10px 0 5px; font-size: 12px; color: var(--muted); }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
   .chips button { padding: 3px 8px; font-size: 12px; background: var(--bg); border-radius: 99px; }
   .chips button.on { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
@@ -57,6 +60,8 @@
   .swatches button.on { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--accent); }
   .swatches .custom { position: relative; display: grid; place-items: center; color: var(--muted); background: #fff; overflow: hidden; }
   .swatches .custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .swatches .none { font-size: 12px; color: var(--muted); line-height: 24px; }
+  .chips button.warn { color: #b3261e; }
   .plist { list-style: none; margin: 6px 0; padding: 0; max-height: 170px; overflow: auto; }
   .plist li { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; }
   .plist .t { flex: 1; overflow-wrap: anywhere; }
@@ -75,7 +80,7 @@
   #lists .plist { max-height: none; margin: 2px 0 10px; }
   #lists button.room { padding: 2px 0; background: none; box-shadow: none; font-size: 12px; font-weight: 600; color: var(--accent); }
   #lists .empty { color: var(--muted); font-size: 13px; }
-  @media (max-width: 800px) { main { flex-direction: column; } #pane3d { border-left: 0; border-top: 1px solid var(--line); } kbd { display: none; } }
+  @media (max-width: 800px) { main { flex-direction: column; } .sidep { flex-basis: min(290px, 40%); } #props { border-right: 0; border-bottom: 1px solid var(--line); } #props3d { border-left: 0; border-top: 1px solid var(--line); } #pane3d { border-left: 0; border-top: 1px solid var(--line); } kbd { display: none; } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -122,10 +127,10 @@
 </header>
 <div id="lists"></div>
 <main>
+  <aside id="props" class="sidep"></aside>
   <div class="pane" id="pane2d">
     <canvas id="plan"></canvas>
     <div class="tag">Floor plan</div>
-    <div id="props"></div>
     <div class="hint"><span id="hint"></span><span id="total"></span></div>
   </div>
   <div class="pane" id="pane3d">
@@ -134,6 +139,7 @@
     <div class="hint"><span>Drag to orbit · right-drag to pan · scroll to zoom</span>
       <span style="pointer-events:auto"><button id="allFloors" style="background:#fff" title="Switch between all floors and only up to the floor being edited">Showing up to this floor</button> <button id="fit" style="background:#fff">Reset view</button></span></div>
   </div>
+  <aside id="props3d" class="sidep"></aside>
 </main>
 
 <script type="module">
@@ -244,6 +250,23 @@ let rooms = [], allRooms = [];                     // rooms of the active floor 
 const undoStack = [], redoStack = [];
 const wallById = id => S.walls.find(w => w.id === id);
 
+/* Colour picker shared by every panel: preset swatches and a custom colour, then the colours the user saved (kept in the plan). */
+function colorPicker(presets, color) {
+  color = (color || '').toLowerCase();
+  const saved = P.saved || [], sw = c => `<button data-color="${c}" title="${c}" style="background:${c}" class="${c === color ? 'on' : ''}"></button>`;
+  return `<div class="swatches">${presets.map(sw).join('')}
+      <label class="custom" title="Custom color"><input type="color" value="${color}">+</label></div>
+    <div class="sub">Saved colors</div>
+    <div class="swatches">${saved.map(sw).join('') || '<span class="none">None yet — pick a color, then save it</span>'}</div>
+    <div class="chips">${saved.includes(color)
+      ? `<button class="warn" data-unsave="${color}">Delete this saved color</button>`
+      : `<button data-save="${color}">+ Save this color</button>`}</div>`;
+}
+function bindSaved(el) {                             // the save / delete buttons; swatch clicks are bound by each panel
+  const set = list => { commit(); if (list.length) P.saved = list; else delete P.saved; save(); showProps(); };
+  el.querySelectorAll('[data-save]').forEach(b => b.onclick = () => set([...(P.saved || []), b.dataset.save].slice(-24)));
+  el.querySelectorAll('[data-unsave]').forEach(b => b.onclick = () => set((P.saved || []).filter(c => c !== b.dataset.unsave)));
+}
 function commit() { undoStack.push(JSON.stringify(P)); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
 function restore(from, to) {
   if (!from.length) return;
@@ -545,7 +568,8 @@ cv.addEventListener('pointerdown', e => {
     if (av) drag = { type: 'node', pts: [av], ex: new Set() };
     else if (!h) { sel = null; pan(); drag.pick = m; }   // a click without dragging selects the room/area under it
     else if (h.type === 'stair') { sel = { type: 'stair', id: h.st.id }; drag = { type: 'stair', st: h.st, ox: h.st.x, oy: h.st.y, start: m }; }
-    else if (h.type === 'opening') { sel = { type: 'opening', id: h.o.id }; drag = { type: 'opening', o: h.o }; }
+    else if (h.type === 'opening') { sel = { type: 'opening', id: h.o.id }; if (sel3 && sel3.kind === 'door') sel3 = null;   // one picked door at a time
+      drag = { type: 'opening', o: h.o }; }
     else if (h.type === 'node') { const pts = endpointsAt([key(h.p)]); drag = { type: 'node', pts, ex: new Set(pts) }; }
     else {
       sel = { type: 'wall', id: h.w.id };
@@ -639,7 +663,8 @@ function drawOpening(o, selected) {
   const at = d => toS({ x: w.a.x + ux * d, y: w.a.y + uy * d });
   const p0 = at(o.pos - o.width / 2), p1 = at(o.pos + o.width / 2), T = S.thickness * view.s, c = selected ? '#d9632b' : '#3a3f48';
   ctx.lineCap = 'butt'; ctx.strokeStyle = '#fff'; ctx.lineWidth = T + 2; line(p0, p1);
-  ctx.strokeStyle = c; ctx.lineWidth = 1.5;
+  if (selected) { ctx.strokeStyle = 'rgba(217,99,43,.28)'; ctx.lineWidth = T + 10; line(p0, p1); }   // glow behind the picked opening
+  ctx.strokeStyle = c; ctx.lineWidth = selected ? 2.5 : 1.5;
   if (o.type === 'window') {
     const nx = -uy * T / 2, ny = ux * T / 2;
     ctx.strokeStyle = selected ? c : '#3b82c4';
@@ -647,9 +672,11 @@ function drawOpening(o, selected) {
     ctx.lineTo(p0.x - nx, p0.y - ny); ctx.closePath(); ctx.stroke(); line(p0, p1);
   } else if (o.width > 1.8) { line(p0, p1);            // garage-size door: drawn closed
   } else {
-    const r = o.width * view.s, a = Math.atan2(uy, ux);
-    line(p0, { x: p0.x - uy * r, y: p0.y + ux * r });
-    ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(p0.x, p0.y, r, a, a + Math.PI / 2); ctx.stroke(); ctx.setLineDash([]);
+    const r = o.width * view.s, a = Math.atan2(uy, ux), atB = o.hinge === 'b', sw = o.swing === -1 ? -1 : 1;
+    const h = atB ? p1 : p0;                           // hinge end; the leaf swings to the `sw` side of the wall
+    line(h, { x: h.x - uy * r * sw, y: h.y + ux * r * sw });
+    ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(h.x, h.y, r, atB ? a + Math.PI : a, a + sw * Math.PI / 2, atB === (sw === 1));
+    ctx.stroke(); ctx.setLineDash([]);
   }
 }
 function draw() {
@@ -717,7 +744,7 @@ function draw() {
     ctx.strokeStyle = sel && sel.type === 'wall' && sel.id === w.id ? '#d9632b' : '#3a3f48';
     line(toS(w.a), toS(w.b));
   }
-  for (const o of S.openings) drawOpening(o, sel && sel.type === 'opening' && sel.id === o.id);
+  for (const o of S.openings) drawOpening(o, pickedDoor(P.active, o));
   // dimensions
   for (const w of S.walls) {
     const a = toS(w.a), b = toS(w.b), L = Math.hypot(b.x - a.x, b.y - a.y); if (L < 46) continue;
@@ -806,8 +833,7 @@ function showRoomProps(room) {
     <input type="text" id="rname" placeholder="Name, e.g. Kitchen" maxlength="40">
     <div class="chips">${ROOM_TYPES.map(t => `<button data-name="${t}" class="${t === room.name ? 'on' : ''}">${t}</button>`).join('')}</div>
     <div class="sub">Color</div>
-    <div class="swatches">${SWATCHES.map(c => `<button data-color="${c}" title="${c}" style="background:${c}" class="${c === room.color ? 'on' : ''}"></button>`).join('')}
-      <label class="custom" title="Custom color"><input type="color" value="${room.color}">+</label></div>
+    ${colorPicker(SWATCHES, room.color)}
     <div class="sub">Planner</div>
     <div class="chips" style="margin-top:0">${Object.entries(LISTS).map(([k, v]) =>
       `<button data-tab="${k}" class="${k === listTab ? 'on' : ''}">${v.label}${openOf(k) ? ' (' + openOf(k) + ')' : ''}</button>`).join('')}</div>
@@ -844,6 +870,7 @@ function showRoomProps(room) {
   custom.onchange = () => showProps();
   props.querySelectorAll('[data-name]').forEach(b => b.onclick = () => edit('name', b.dataset.name, true));
   props.querySelectorAll('[data-color]').forEach(b => b.onclick = () => edit('color', b.dataset.color, true));
+  bindSaved(props);
 }
 // Whole-house view of every room's lists (the "Lists" button in the toolbar).
 const listsEl = document.getElementById('lists'), listsBtn = document.getElementById('listsBtn');
@@ -879,6 +906,50 @@ listsBtn.onclick = () => { listsOpen = !listsOpen; renderLists(); };
 const RAIL_STYLES = { bars: 'Open railing', glass: 'Glass', solid: 'Clad wall' };
 const railStyle = a => a.railStyle || (a.type === 'balcony' ? 'glass' : 'bars');
 const DOOR_STYLES = { hinged: 'Hinged', glass: 'Glass slider', garage: 'Garage door' };
+// What a door on "Auto" turns into: a wide door in an outside wall is a glass slider, anything else is hinged.
+function doorOuter(fi, o) {
+  const f = P.floors[fi], w = f.walls.find(x => x.id === o.wallId);
+  return !!w && [1, -1].some(sign => sideRuns(allRooms[fi] || [], w.a, w.b, sign, f.thickness / 2).some(r => r.room < 0 && o.pos > r.s && o.pos < r.e));
+}
+function doorStyle(fi, o) { return o.style || (doorOuter(fi, o) && o.width >= 1.4 ? 'glass' : 'hinged'); }
+// Colour a door has until the user picks one: timber inside, dark outside, cream garage panels, black slider joinery.
+const DOOR_COLORS = { hinged: '#a9774c', outer: '#2a2d31', garage: '#e4e2d2', glass: '#1d1f22' };
+const doorColor = (fi, o) => { const st = doorStyle(fi, o); return o.color || DOOR_COLORS[st === 'hinged' && doorOuter(fi, o) ? 'outer' : st]; };
+const DOOR_SWATCHES = ['#ffffff', '#f3efe8', '#e4e2d2', '#d8c3a5', '#c8a57c', '#a9774c', '#8a5a36', '#5c3d26', '#b0bec5', '#7d8a94',
+  '#5b7a99', '#2f4858', '#6b8f71', '#a63d2f', '#4a4f58', '#2a2d31', '#1d1f22'];
+// Door type and opening side: the same controls in the 2D panel and in the 3D panel.
+function doorControls(fi, o) {
+  const style = doorStyle(fi, o);
+  return `<div class="sub">Type</div>
+    <div class="chips" style="margin-top:0"><button data-style="" class="${o.style ? '' : 'on'}">Auto</button>${Object.entries(DOOR_STYLES).map(([k, v]) =>
+      `<button data-style="${k}" class="${k === o.style ? 'on' : ''}">${v}</button>`).join('')}</div>`
+    + (style === 'garage' ? '' : `<div class="sub">Opening</div><div class="chips" style="margin-top:0">
+      <button data-flip="hinge">${style === 'glass' ? 'Slide from other end' : 'Hinge on other side'}</button>
+      ${style === 'hinged' ? '<button data-flip="swing">Open the other way</button>' : ''}</div>`)
+    + `<div class="sub">${style === 'glass' ? 'Frame color' : 'Color'}</div>
+    ${colorPicker(DOOR_SWATCHES, doorColor(fi, o))}
+    ${o.color ? '<div class="chips"><button data-color="">Reset to default color</button></div>' : ''}`;
+}
+function bindDoorControls(el, o, done) {
+  el.querySelectorAll('[data-style]').forEach(b => b.onclick = () => {
+    commit(); if (b.dataset.style) o.style = b.dataset.style; else delete o.style; changed(); done();
+  });
+  el.querySelectorAll('[data-flip]').forEach(b => b.onclick = () => {
+    commit();
+    if (b.dataset.flip === 'hinge') o.hinge = o.hinge === 'b' ? 'a' : 'b'; else o.swing = o.swing === -1 ? 1 : -1;
+    changed(); done();
+  });
+  let dirty = false;                                   // one undo step per run of color dragging
+  const paint = (c, rerender) => {
+    if (!dirty) { commit(); dirty = true; }
+    if (c) o.color = c; else delete o.color;
+    changed(); if (rerender) done();
+  };
+  const custom = el.querySelector('label.custom input'); if (!custom) return;   // windows have no door controls
+  custom.oninput = () => paint(custom.value); custom.onchange = () => done();
+  el.querySelectorAll('[data-color]').forEach(b => b.onclick = () => paint(b.dataset.color, true));
+  bindSaved(el);
+}
 const AREA_SWATCHES =['#b7d69b', '#9cc58a', '#d5e6bd', '#c9a273', '#a97c50', '#e0c9a6', '#d3d3d3', '#b3b8bf', '#d8d2c4', '#ece7dd', '#bcd4e6', '#ffffff'];
 function showAreaProps(a) {
   const cfg = AREA[a.type];
@@ -886,8 +957,7 @@ function showAreaProps(a) {
     <input type="text" id="rname" placeholder="Name (optional)" maxlength="40">
     <div class="chips">${Object.entries(AREA).map(([k, c]) => `<button data-type="${k}" class="${k === a.type ? 'on' : ''}">${c.label}</button>`).join('')}</div>
     <div class="sub">Color</div>
-    <div class="swatches">${AREA_SWATCHES.map(c => `<button data-color="${c}" title="${c}" style="background:${c}" class="${c === a.color ? 'on' : ''}"></button>`).join('')}
-      <label class="custom" title="Custom color"><input type="color" value="${a.color}">+</label></div>
+    ${colorPicker(AREA_SWATCHES, a.color)}
     <div class="row" style="margin-top:10px">Height above ground<span><input type="number" data-f="elev" value="${a.elev}" step="0.05" min="0" max="6"> m</span></div>
     <div class="row"><label><input type="checkbox" id="rail" ${a.rail ? 'checked' : ''}>${cfg.railName}</label>
       <span><input type="number" data-f="railH" value="${a.railH}" step="0.1" min="0.3" max="3"> m</span></div>
@@ -908,6 +978,7 @@ function showAreaProps(a) {
   custom.onchange = () => showProps();
   props.querySelector('#rail').onchange = e => edit({ rail: e.target.checked }, true);
   props.querySelectorAll('[data-color]').forEach(b => b.onclick = () => edit({ color: b.dataset.color }, true));
+  bindSaved(props);
   props.querySelectorAll('[data-rail]').forEach(b => b.onclick = () => edit({ railStyle: b.dataset.rail }, true));
   props.querySelectorAll('[data-type]').forEach(b => b.onclick = () => {   // switching type applies that type's defaults
     const c = AREA[b.dataset.type]; edit({ type: b.dataset.type, color: c.color, elev: c.elev, rail: c.rail, railH: c.railH }, true);
@@ -949,6 +1020,21 @@ function showStairProps(st) {
   props.querySelector('.del').onclick = deleteSelection;
 }
 function showProps() {
+  dirty3d = true;                                      // the 3D view highlights the opening selected on the plan
+  showProps3();                                        // keeps the 3D wall panel in step after undo, floor changes, edits
+  renderProps();
+  const open = props.style.display === 'block';
+  if (open === sideOpen) return;
+  sideOpen = open; resize();                           // the panes give up the panel's width
+  if (open) {                                          // slide the plan left if the panel would cover part of it
+    const b = bounds(), left = view.ox + (b.cx - (b.w || 0) / 2) * view.s, right = view.ox + (b.cx + (b.w || 0) / 2) * view.s;
+    sideShift = Math.max(0, Math.min(right - (cw - 30), left - 30));
+    view.ox -= sideShift;
+  } else { view.ox += sideShift; sideShift = 0; }
+  draw();
+}
+let sideShift = 0, sideOpen = false;
+function renderProps() {
   const room = selectedRoom();
   if (room) return showRoomProps(room);
   if (sel && sel.type === 'room') sel = null;
@@ -966,15 +1052,12 @@ function showProps() {
     ? `<h4>Wall</h4>${row('Length', 'length', wlen(w).toFixed(2), 0.1)}<button class="del">Delete wall</button>`
     : `<h4>${o.type === 'door' ? 'Door' : 'Window'}</h4>${row('Width', 'width', o.width)}${row('Height', 'height', o.height)}`
       + (o.type === 'window' ? row('Sill height', 'sill', o.sill)
-        : `<div class="chips"><button data-style="" class="${o.style ? '' : 'on'}">Auto</button>${Object.entries(DOOR_STYLES).map(([k, v]) =>
-            `<button data-style="${k}" class="${k === o.style ? 'on' : ''}">${v}</button>`).join('')}</div>`)
+        : doorControls(P.active, o))
       + `<button class="del">Delete ${o.type}</button>`;
   props.style.display = 'block';
-  props.querySelectorAll('[data-style]').forEach(b => b.onclick = () => {
-    commit(); if (b.dataset.style) o.style = b.dataset.style; else delete o.style; changed(); showProps();
-  });
+  if (o) bindDoorControls(props, o, showProps);
   props.querySelector('.del').onclick = deleteSelection;
-  props.querySelectorAll('input').forEach(inp => inp.onchange = () => {
+  props.querySelectorAll('input[type=number]').forEach(inp => inp.onchange = () => {
     const v = parseFloat(inp.value); if (!(v > 0) && inp.dataset.f !== 'sill') return showProps();
     commit();
     if (w) {
@@ -1007,12 +1090,47 @@ const BOARD = 0.15;
 function boardTexture() {
   const c = document.createElement('canvas'); c.width = 8; c.height = 64;
   const g = c.getContext('2d'), grad = g.createLinearGradient(0, 0, 0, 64);
-  grad.addColorStop(0, '#f1efdc'); grad.addColorStop(0.8, '#e6e4cd'); grad.addColorStop(0.9, '#d6d3b9');
-  grad.addColorStop(0.91, '#8f8c77'); grad.addColorStop(1, '#b9b69e');
+  grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.8, '#f4f4f4'); grad.addColorStop(0.9, '#e2e2e2');
+  grad.addColorStop(0.91, '#989898'); grad.addColorStop(1, '#c6c6c6');   // neutral, so the material colour tints it
   g.fillStyle = grad; g.fillRect(0, 0, 8, 64);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   return t;
+}
+// Wall-face materials: plain paint indoors, weatherboards outdoors; `picked` glows as the 3D selection.
+const BOARD_TEX = boardTexture(), WALL_COLOR = '#f3efe8', CLAD_COLOR = '#ece9d2', faceMats = new Map();
+function faceMat(color, clad, picked) {
+  const k = [color || '', +clad, +picked].join('|');
+  if (!faceMats.has(k)) faceMats.set(k, new THREE.MeshStandardMaterial({
+    color: color || (clad ? CLAD_COLOR : WALL_COLOR), map: clad ? BOARD_TEX : null, roughness: clad ? 0.9 : 0.95,
+    emissive: picked ? '#d9632b' : '#000000', emissiveIntensity: 0.35 }));
+  return faceMats.get(k);
+}
+// One side of a wall (sign = which side), split into stretches by what each faces: a room (its index) or outdoors (-1).
+function sideRuns(rooms, a, b, sign, half) {
+  const L = dist(a, b), n = Math.max(1, Math.round(L / 0.1)), runs = [];
+  const nx = -(b.y - a.y) / L * sign * (half + 0.08), ny = (b.x - a.x) / L * sign * (half + 0.08);
+  for (let k = 0; k < n; k++) {
+    const t = (k + 0.5) / n, p = { x: a.x + (b.x - a.x) * t + nx, y: a.y + (b.y - a.y) * t + ny };
+    const room = rooms.findIndex(r => inside(p, r.poly)), last = runs[runs.length - 1];
+    if (last && last.room === room) last.e = (k + 1) / n * L; else runs.push({ room, s: k / n * L, e: (k + 1) / n * L });
+  }
+  return runs;
+}
+const paintOf = (w, sign, run) => (w.paint || []).findLast(p => p.side === sign && p.at >= run.s && p.at <= run.e);
+let sel3 = null;                                   // picked in the 3D view: { kind:'wall', floor, id, side, at } or { kind:'door', floor, id }
+// A door or window is "picked" when it is selected on the plan or clicked in the 3D view; both views highlight it.
+const pickedDoor = (fi, o) => (fi === P.active && !!sel && sel.type === 'opening' && sel.id === o.id)
+  || (!!sel3 && sel3.kind === 'door' && sel3.floor === fi && sel3.id === o.id);
+const doorMats = new Map(), glowMats = new Map();
+function doorMat(color) {
+  if (!doorMats.has(color)) doorMats.set(color, new THREE.MeshStandardMaterial({ color, roughness: 0.65 }));
+  return doorMats.get(color);
+}
+const PICK = new THREE.MeshBasicMaterial({ color: '#f26a1b' });   // orange outline round the picked door or window
+function glow(m) {                                  // the same material, faintly lit, so its own colour still reads
+  if (!glowMats.has(m)) { const c = m.clone(); c.emissive.set('#e8641f'); c.emissiveIntensity = 0.18; glowMats.set(m, c); }
+  return glowMats.get(m);
 }
 const M = {
   wall: new THREE.MeshStandardMaterial({ color: '#f3efe8', roughness: 0.95 }),
@@ -1022,7 +1140,7 @@ const M = {
   door: new THREE.MeshStandardMaterial({ color: '#a9774c', roughness: 0.7 }),
   doorExt: new THREE.MeshStandardMaterial({ color: '#2a2d31', roughness: 0.6 }),
   garage: new THREE.MeshStandardMaterial({ color: '#e4e2d2', roughness: 0.7 }),
-  clad: new THREE.MeshStandardMaterial({ map: boardTexture(), roughness: 0.9 }),
+  clad: faceMat(null, true, false),
   stair: new THREE.MeshStandardMaterial({ color: '#c8a57c', roughness: 0.8, side: THREE.DoubleSide }),
   fence: new THREE.MeshStandardMaterial({ color: '#b89268', roughness: 0.9 }),
   rail: new THREE.MeshStandardMaterial({ color: '#50555c', roughness: 0.5 }),
@@ -1073,26 +1191,16 @@ function buildFloor(S, rooms, level, below) {
     m.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0); m.castShadow = m.receiveShadow = mat !== M.glass;
     parent.add(m); return m;
   };
-  // Exterior cladding: wall faces that look outdoors get a weatherboard skin.
-  // extRuns = the stretches [from, to] along one side of a wall (sign = which side) with no room behind them.
-  const extRuns = (a, b, sign, half) => {
-    const L = dist(a, b), n = Math.max(1, Math.round(L / 0.1)), runs = []; let start = null;
-    const nx = -(b.y - a.y) / L * sign * (half + 0.08), ny = (b.x - a.x) / L * sign * (half + 0.08);
-    for (let k = 0; k <= n; k++) {
-      const t = (k + 0.5) / n, p = { x: a.x + (b.x - a.x) * t + nx, y: a.y + (b.y - a.y) * t + ny };
-      const out = k < n && !rooms.some(r => inside(p, r.poly));
-      if (out && start === null) start = k;
-      if (!out && start !== null) { runs.push([start ? start / n * L : -half - 0.012, k < n ? k / n * L : L + half + 0.012]); start = null; }
-    }
-    return runs;
-  };
+  // Wall faces get a thin skin where they need one: weatherboards outdoors, paint where the user picked a colour.
+  // A run is { a, b, out, mat }: the stretch [a, b] along the wall, whether it faces outdoors, and its material.
   const skin = (g, runs, sign, x0, x1, y0, y1, half = T / 2) => {
-    for (const [a, b] of runs) {
-      const s = Math.max(a, x0 - 0.012), e = Math.min(b, x1 + 0.012); if (e - s < 0.02 || y1 - y0 < 1e-3) continue;
+    for (const r of runs) {
+      if (!r.mat) continue;
+      const s = Math.max(r.a, x0 - 0.012), e = Math.min(r.b, x1 + 0.012); if (e - s < 0.02 || y1 - y0 < 1e-3) continue;
       const geo = new THREE.PlaneGeometry(e - s, y1 - y0), uv = geo.attributes.uv;
       for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i), (y0 + uv.getY(i) * (y1 - y0)) / BOARD);   // boards line up by height
-      const m = new THREE.Mesh(geo, M.clad);
-      m.position.set((s + e) / 2, (y0 + y1) / 2, sign * (half + 0.012)); if (sign < 0) m.rotation.y = Math.PI;
+      const m = new THREE.Mesh(geo, r.mat);
+      m.position.set((s + e) / 2, (y0 + y1) / 2, sign * (half + (r.out ? 0.012 : 0.004))); if (sign < 0) m.rotation.y = Math.PI;
       m.receiveShadow = true; g.add(m);
     }
   };
@@ -1110,17 +1218,24 @@ function buildFloor(S, rooms, level, below) {
     g.position.set(w.a.x, 0, w.a.y); g.rotation.y = -Math.atan2(w.b.y - w.a.y, w.b.x - w.a.x);
     let cur = -T / 2;                                   // extend half a thickness to fill corners
     const ops = S.openings.filter(o => o.wallId === w.id).sort((a, b) => a.pos - b.pos);
-    const ext = [1, -1].map(sign => extRuns(w.a, w.b, sign, T / 2));
+    g.userData.wall = { floor: level, id: w.id, len: L };   // lets a click in the 3D view find this wall
+    const sides = [1, -1].map(sign => sideRuns(rooms, w.a, w.b, sign, T / 2).map(r => {
+      const out = r.room < 0, paint = paintOf(w, sign, r);
+      const picked = !!sel3 && sel3.kind === 'wall' && sel3.floor === level && sel3.id === w.id && sel3.side === sign && sel3.at >= r.s && sel3.at <= r.e;
+      return { out, mat: out || paint || picked ? faceMat(paint?.color, out, picked) : null,   // outdoor runs wrap round the corners
+        a: out && r.s < 0.001 ? -T / 2 - 0.012 : r.s, b: out && r.e > L - 0.001 ? L + T / 2 + 0.012 : r.e };
+    }));
+    const ext = sides.map(runs => runs.filter(r => r.out));
     const wall = (x0, x1, y0, y1) => {
       box(g, M.wall, x0, x1, y0, y1);
-      skin(g, ext[0], 1, x0, x1, y0, y1); skin(g, ext[1], -1, x0, x1, y0, y1);
+      skin(g, sides[0], 1, x0, x1, y0, y1); skin(g, sides[1], -1, x0, x1, y0, y1);
     };
-    const outdoors = x => ext.some(runs => runs.some(([a, b]) => x > a && x < b));
-    const frame = (s, e, bot, top, f, bars) => {        // black joinery; `bars` = number of vertical mullions
+    const outdoors = x => ext.some(runs => runs.some(r => x > r.a && x < r.b));
+    const frame = (s, e, bot, top, f, bars, to = g, mat = M.frame) => {   // black joinery; `bars` = number of vertical mullions
       const d = T + 0.07;
-      box(g, M.frame, s, e, top - f, top, d); box(g, M.frame, s, s + f, bot, top, d); box(g, M.frame, e - f, e, bot, top, d);
-      if (bot > 0.01) box(g, M.frame, s, e, bot, bot + f, d);
-      for (let j = 1; j <= bars; j++) { const x = s + (e - s) * j / (bars + 1); box(g, M.frame, x - f / 2, x + f / 2, bot, top, 0.05); }
+      box(to, mat, s, e, top - f, top, d); box(to, mat, s, s + f, bot, top, d); box(to, mat, e - f, e, bot, top, d);
+      if (bot > 0.01) box(to, mat, s, e, bot, bot + f, d);
+      for (let j = 1; j <= bars; j++) { const x = s + (e - s) * j / (bars + 1); box(to, mat, x - f / 2, x + f / 2, bot, top, 0.05); }
     };
     for (const o of ops) {
       const s = Math.max(o.pos - o.width / 2, cur), e = Math.min(o.pos + o.width / 2, L);
@@ -1129,40 +1244,53 @@ function buildFloor(S, rooms, level, below) {
       wall(cur, s, 0, H); wall(s, e, 0, bot); wall(s, e, top, H);
       const outer = outdoors((s + e) / 2);
       const style = o.type === 'door' ? o.style || (outer && o.width >= 1.4 ? 'glass' : 'hinged') : '';
+      const dg = new THREE.Group(), atB = o.hinge === 'b', sw = o.swing === -1 ? -1 : 1;
+      const dc = o.color ? doorMat(o.color) : null;      // the user's colour, if they picked one
+      g.add(dg);
+      if (o.type === 'door') dg.userData.door = { floor: level, id: o.id };   // lets a click in the 3D view find this door
       if (o.type === 'window') {
-        box(g, M.glass, s, e, bot, top, 0.02);
-        frame(s, e, bot, top, 0.05, Math.max(1, Math.round((e - s) / 0.9) - 1));
+        box(dg, M.glass, s, e, bot, top, 0.02);
+        frame(s, e, bot, top, 0.05, Math.max(1, Math.round((e - s) / 0.9) - 1), dg);
         if (outer) for (const sign of [1, -1]) {         // sill board on the outdoor side
-          if (!ext[sign > 0 ? 0 : 1].some(([a, b]) => (s + e) / 2 > a && (s + e) / 2 < b)) continue;
+          if (!ext[sign > 0 ? 0 : 1].some(r => (s + e) / 2 > r.a && (s + e) / 2 < r.b)) continue;
           const sill = box(g, M.trim, s - 0.04, e + 0.04, bot - 0.04, bot, 0.06); if (sill) sill.position.z = sign * (T / 2 + 0.04);
         }
       } else if (style === 'glass') {                     // glazed slider: fixed panels with one leaf slid open
         const n = Math.max(2, Math.round((e - s) / 0.9)), pw = (e - s) / n;
-        frame(s, e, 0, top, 0.06, 0);
+        const fm = dc || M.frame;
+        frame(s, e, 0, top, 0.06, 0, dg, fm);
         for (let j = 0; j < n; j++) {
-          const open = j === n - 1 && n > 2, x0 = s + pw * (open ? j - 0.85 : j), z = (j % 2 ? 1 : -1) * 0.03;
-          const leaf = new THREE.Group(); leaf.position.set(x0, 0, z); g.add(leaf);
+          const open = n > 2 && j === (atB ? 0 : n - 1), x0 = s + pw * (open ? j + (atB ? 0.85 : -0.85) : j), z = (j % 2 ? 1 : -1) * 0.03;
+          const leaf = new THREE.Group(); leaf.position.set(x0, 0, z); dg.add(leaf);
           box(leaf, M.glass, 0.05, pw - 0.05, 0.05, top - 0.11, 0.012);
-          box(leaf, M.frame, 0, pw, top - 0.11, top - 0.06, 0.04); box(leaf, M.frame, 0, pw, 0, 0.06, 0.04);
-          box(leaf, M.frame, 0, 0.05, 0, top - 0.06, 0.04); box(leaf, M.frame, pw - 0.05, pw, 0, top - 0.06, 0.04);
-          box(leaf, M.frame, 0, pw, top * 0.42, top * 0.42 + 0.05, 0.04);
+          box(leaf, fm, 0, pw, top - 0.11, top - 0.06, 0.04); box(leaf, fm, 0, pw, 0, 0.06, 0.04);
+          box(leaf, fm, 0, 0.05, 0, top - 0.06, 0.04); box(leaf, fm, pw - 0.05, pw, 0, top - 0.06, 0.04);
+          box(leaf, fm, 0, pw, top * 0.42, top * 0.42 + 0.05, 0.04);
         }
       } else if (style === 'garage') {                    // sectional door: stacked panels
-        frame(s, e, 0, top, 0.05, 0);
+        frame(s, e, 0, top, 0.05, 0, dg);
         const n = Math.max(3, Math.round(top / 0.5)), ph = (top - 0.05) / n;
-        for (let j = 0; j < n; j++) box(g, M.garage, s + 0.05, e - 0.05, j * ph + 0.012, (j + 1) * ph - 0.012, 0.05);
-        box(g, M.frame, s + 0.05, e - 0.05, 0, top - 0.05, 0.03);
-      } else {
-        const hinge = new THREE.Group(); hinge.position.set(s, 0, 0); hinge.rotation.y = o.width > 1.2 ? 0 : -1.25; g.add(hinge);   // wide (wardrobe) doors stay shut
-        box(hinge, outer ? M.doorExt : M.door, 0, e - s, 0, top - 0.02, 0.04);
-        if (outer) frame(s, e, 0, top, 0.04, 0);
+        for (let j = 0; j < n; j++) box(dg, dc || M.garage, s + 0.05, e - 0.05, j * ph + 0.012, (j + 1) * ph - 0.012, 0.05);
+        box(dg, M.frame, s + 0.05, e - 0.05, 0, top - 0.05, 0.03);
+      } else {                                            // hinged leaf, ajar; wide (wardrobe) doors stay shut
+        const hinge = new THREE.Group(); hinge.position.set(atB ? e : s, 0, 0); dg.add(hinge);
+        hinge.rotation.y = o.width > 1.2 ? 0 : (atB ? 1.25 : -1.25) * sw;
+        box(hinge, dc || (outer ? M.doorExt : M.door), atB ? s - e : 0, atB ? 0 : e - s, 0, top - 0.02, 0.04);
+        if (outer) frame(s, e, 0, top, 0.04, 0, dg);
+      }
+      if (pickedDoor(level, o)) {                         // selection: faint glow plus an orange outline proud of the wall
+        dg.traverse(m => { if (m.isMesh) m.material = glow(m.material); });
+        const k = 0.05, d = T + 0.16;
+        for (const [x0, x1, y0, y1] of [[s - k, s, bot, top + k], [e, e + k, bot, top + k], [s, e, top, top + k], [s, e, Math.max(bot - k, 0), Math.max(bot, k)]]) {
+          const m = box(dg, PICK, x0, x1, y0, y1, d); if (m) m.castShadow = false;
+        }
       }
       cur = e;
     }
     wall(cur, L + T / 2, 0, H);
     if (level) wall(-T / 2, L + T / 2, -SLAB, 0);        // close the gap down to the floor below
-    else for (const [i, sign] of [[0, 1], [1, -1]]) for (const [a, b] of ext[i]) {   // dark plinth along the ground
-      const m = box(g, M.rail, a, b, 0, 0.12, 0.03); if (m) m.position.z = sign * (T / 2 + 0.02);
+    else for (const [i, sign] of [[0, 1], [1, -1]]) for (const r of ext[i]) {   // dark plinth along the ground
+      const m = box(g, M.rail, r.a, r.b, 0, 0.12, 0.03); if (m) m.position.z = sign * (T / 2 + 0.02);
     }
     model.add(g);
   }
@@ -1200,7 +1328,7 @@ function buildFloor(S, rooms, level, below) {
           for (let j = 0; j <= posts; j++) { const x = s + (e - s) * j / posts; box(g, M.fence, x - 0.05, x + 0.05, 0, RH + 0.08, 0.1); }
         } else if (railStyle(a) === 'solid') {          // clad balustrade wall with a white capping
           box(g, M.wall, s, e, -(level ? SLAB : 0), RH, 0.12);
-          skin(g, [[s, e]], 1, s, e, -(level ? SLAB : 0), RH, 0.06); skin(g, [[s, e]], -1, s, e, -(level ? SLAB : 0), RH, 0.06);
+          for (const sign of [1, -1]) skin(g, [{ a: s, b: e, out: true, mat: M.clad }], sign, s, e, -(level ? SLAB : 0), RH, 0.06);
           box(g, M.trim, s - 0.02, e + 0.02, RH, RH + 0.04, 0.2);
         } else {
           box(g, M.rail, s, e, RH - 0.05, RH, 0.07); box(g, M.rail, s, e, 0.08, 0.12, 0.04);
@@ -1227,6 +1355,67 @@ function buildFloor(S, rooms, level, below) {
     }
     return model;
   })(new THREE.Group());
+}
+/* Picking a wall face in the 3D view opens its panel on the right. */
+const props3 = document.getElementById('props3d'), ray = new THREE.Raycaster();
+const WALL_SWATCHES = ['#f3efe8', '#ffffff', '#ece9d2', '#e3ddcf', '#d6cfc0', '#cfd8dc', '#b0bec5', '#c8d6c1', '#a8c0a0',
+  '#f0d9b5', '#e6c9a8', '#d9a58c', '#c97b63', '#8fa9c4', '#5b7a99', '#4a4f58', '#2b2f36'];
+let down3 = null;
+c3.addEventListener('pointerdown', e => { down3 = { x: e.clientX, y: e.clientY }; });
+c3.addEventListener('pointerup', e => {                // a click, not the end of an orbit drag
+  if (!down3 || e.button !== 0 || Math.hypot(e.clientX - down3.x, e.clientY - down3.y) > 4) return;
+  const r = c3.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera);
+  const up = (o, k) => { while (o && !o.userData[k]) o = o.parent; return o; };
+  const hit = ray.intersectObject(model, true).find(h => up(h.object, 'door') || h.object.material !== M.glass);   // look through window glass
+  const d = hit && up(hit.object, 'door'), g = hit && up(hit.object, 'wall');
+  if (d) { sel3 = { kind: 'door', ...d.userData.door }; if (sel && sel.type === 'opening') { sel = null; showProps(); } }   // one picked door at a time
+  else if (g) {
+    const p = g.worldToLocal(hit.point.clone()), u = g.userData.wall;
+    sel3 = { kind: 'wall', floor: u.floor, id: u.id, side: p.z >= 0 ? 1 : -1, at: r2(clamp(p.x, 0.02, u.len - 0.02)) };
+  } else sel3 = null;
+  dirty3d = true; showProps3(); draw();
+});
+function pickedFace() {                                // resolves sel3 against the current plan
+  const f = sel3 && sel3.kind === 'wall' && P.floors[sel3.floor], w = f && f.walls.find(x => x.id === sel3.id);
+  const rooms = w && (allRooms[sel3.floor] || []);
+  const run = w && sideRuns(rooms, w.a, w.b, sel3.side, f.thickness / 2).find(r => sel3.at >= r.s && sel3.at <= r.e);
+  return run ? { f, w, run, room: rooms[run.room] } : null;
+}
+function showProps3() {
+  const face = pickedFace();
+  const df = sel3 && sel3.kind === 'door' && P.floors[sel3.floor], door = df && df.openings.find(o => o.id === sel3.id);
+  if (!face && !door && sel3) { sel3 = null; dirty3d = true; }
+  const was = props3.style.display === 'block', open = !!(face || door);
+  props3.style.display = open ? 'block' : 'none';
+  if (was !== open) resize();
+  if (door) {
+    props3.innerHTML = `<h4>Door · ${esc(df.name)}</h4>
+      <div class="row" style="margin-top:0">Size<b>${door.width.toFixed(2)} × ${door.height.toFixed(2)} m</b></div>` + doorControls(sel3.floor, door);
+    return bindDoorControls(props3, door, showProps3);
+  }
+  if (!face) return;
+  const { f, w, run, room } = face, out = run.room < 0;
+  const color = paintOf(w, sel3.side, run)?.color || (out ? CLAD_COLOR : WALL_COLOR);
+  props3.innerHTML = `<h4>Wall · ${esc(f.name)}</h4>
+    <div class="row" style="margin-top:0">${out ? 'Outside face' : 'Inside face'}<b>${out ? 'Cladding' : esc(room.name || 'Unnamed room')}</b></div>
+    <div class="row">Length<b>${(run.e - run.s).toFixed(2)} m</b></div>
+    <div class="sub">Color</div>
+    ${colorPicker(WALL_SWATCHES, color)}
+    <button class="del">Reset to default color</button>`;
+  let dirty = false;                                   // one undo step per run of color dragging
+  const paint = (c, rerender) => {
+    if (!dirty) { commit(); dirty = true; }
+    w.paint = (w.paint || []).filter(p => !(p.side === sel3.side && p.at >= run.s && p.at <= run.e));
+    if (c) w.paint.push({ side: sel3.side, at: sel3.at, color: c });
+    if (!w.paint.length) delete w.paint;
+    changed(); if (rerender) showProps3();
+  };
+  const custom = props3.querySelector('input[type=color]');
+  custom.oninput = () => paint(custom.value); custom.onchange = () => showProps3();
+  props3.querySelectorAll('[data-color]').forEach(b => b.onclick = () => paint(b.dataset.color, true));
+  bindSaved(props3);
+  props3.querySelector('.del').onclick = () => paint(null, true);
 }
 function updateSun() {
   const b = bounds(), d = b.size * 0.9 + 4;

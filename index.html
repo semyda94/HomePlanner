@@ -62,6 +62,9 @@
   .swatches .custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   .swatches .none { font-size: 12px; color: var(--muted); line-height: 24px; }
   .chips button.warn { color: #b3261e; }
+  .flist button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; margin-bottom: 4px; padding: 6px 9px; text-align: left; background: var(--bg); }
+  .flist button.on { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+  .flist small { font-size: 11px; color: var(--muted); }
   .plist { list-style: none; margin: 6px 0; padding: 0; max-height: 170px; overflow: auto; }
   .plist li { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 13px; }
   .plist .t { flex: 1; overflow-wrap: anywhere; }
@@ -104,6 +107,9 @@
     <button data-tool="backyard">Backyard</button>
     <button data-tool="deck">Deck</button>
     <button data-tool="balcony">Balcony</button>
+  </div>
+  <div class="group" title="Furniture catalog: pick a piece, then click on the plan to place it">
+    <button data-tool="furniture">Furniture</button>
   </div>
   <div class="group">
     <button id="undo" title="Ctrl+Z">Undo</button>
@@ -233,6 +239,13 @@ function migrate(s) {
       (f.rooms ||= []).push(...fresh.rooms.filter(r => r.name === 'Wardrobe'));
     }
     p.v = 4;
+  }
+  if (p && p.v === 4) {
+    // one-off: the townhouse's floor-1 bedroom (the office) gets its desk along the left wall
+    const f = p.floors[0];
+    if (p.floors.length === 3 && f.walls?.length === 10 && !f.furniture?.length)
+      f.furniture = [{ id: nid(), kind: 'desk', x: 0.42, y: 1.35, rot: 270 }];
+    p.v = 5;
   }
   return p;
 }
@@ -480,6 +493,116 @@ function drawStair(st, rise, mode) {               // mode: 'ghost' (floor below
   ctx.stroke();
   const s0 = toS(g.path[0]); ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(s0.x, s0.y, 2.5, 0, 7); ctx.fill();
 }
+/* Furniture: pieces from the catalog, placed on a floor as { id, kind, x, y, rot, w?, d?, h? } (x, y = centre; rot in degrees).
+   A catalog entry gives the size in metres (w across, d front to back, h tall), the boxes of its 3D model as
+   [x, y0, z, w, h, d, color] (x/z = centre, y0 = underside, +z = front) and the rectangles drawn on the plan as [x, z, w, d]. */
+const alexUnit = x => {                              // IKEA ALEX drawer unit, 36 × 58 × 70 cm, dark grey, five drawers
+  const out = [[x, 0, -0.01, 0.36, 0.70, 0.56, '#46494e']];
+  let y = 0.01; for (const h of [0.19, 0.19, 0.1, 0.1, 0.1]) { out.push([x, y, 0.28, 0.352, h - 0.006, 0.02, '#53565c']); y += h; }
+  return out;
+};
+const DARK = '#3b3e44', OAK = '#c9a877', WHITE = '#f4f2ec';
+const FURN = {
+  desk: { group: 'Office', label: 'Desk: EKBACKEN worktop on 2 ALEX units', short: 'Desk', w: 1.86, d: 0.635, h: 0.728,
+    parts: [...alexUnit(-0.7), ...alexUnit(0.7), [0, 0.70, 0, 1.86, 0.028, 0.635, '#6f4e37']],   // walnut-effect worktop, 186 × 63.5 × 2.8 cm
+    plan: [[-0.7, 0, 0.36, 0.58], [0.7, 0, 0.36, 0.58]] },
+  alex: { group: 'Office', label: 'ALEX drawer unit, dark grey', short: 'ALEX', w: 0.36, d: 0.58, h: 0.70, parts: alexUnit(0), plan: [[0, 0.28, 0.36, 0.02]] },
+  chair: { group: 'Office', label: 'Office chair', short: 'Chair', w: 0.6, d: 0.6, h: 0.95,
+    parts: [[0, 0, 0, 0.58, 0.04, 0.07, DARK], [0, 0, 0, 0.07, 0.04, 0.58, DARK], [0, 0.04, 0, 0.06, 0.36, 0.06, DARK],
+      [0, 0.40, 0.02, 0.48, 0.08, 0.48, '#55595f'], [0, 0.5, -0.24, 0.44, 0.45, 0.06, '#55595f']],
+    plan: [[0, -0.24, 0.44, 0.06]] },
+  bookcase: { group: 'Storage', label: 'Bookcase', short: 'Bookcase', w: 0.8, d: 0.3, h: 2.0,
+    parts: [[-0.39, 0, 0, 0.02, 2, 0.3, WHITE], [0.39, 0, 0, 0.02, 2, 0.3, WHITE], [0, 0, -0.14, 0.76, 2, 0.02, WHITE],
+      ...[0, 0.4, 0.8, 1.2, 1.6, 1.98].map(y => [0, y, 0, 0.76, 0.02, 0.3, WHITE])] },
+  wardrobe: { group: 'Storage', label: 'Wardrobe', short: 'Wardrobe', w: 1.0, d: 0.6, h: 2.0,
+    parts: [[0, 0, -0.01, 1, 2, 0.58, WHITE], [-0.25, 0.06, 0.29, 0.49, 1.93, 0.02, '#e9e6de'], [0.25, 0.06, 0.29, 0.49, 1.93, 0.02, '#e9e6de']],
+    plan: [[0, 0.29, 1, 0.02]] },
+  bed: { group: 'Bedroom', label: 'Double bed', short: 'Bed', w: 1.6, d: 2.05, h: 0.9,
+    parts: [[0, 0.1, 0.02, 1.6, 0.2, 2.0, OAK], [0, 0.3, 0.02, 1.54, 0.2, 1.96, WHITE], [0, 0, -1.0, 1.6, 0.9, 0.05, OAK],
+      [-0.4, 0.5, -0.72, 0.6, 0.1, 0.4, '#ffffff'], [0.4, 0.5, -0.72, 0.6, 0.1, 0.4, '#ffffff']],
+    plan: [[-0.4, -0.72, 0.6, 0.4], [0.4, -0.72, 0.6, 0.4]] },
+  sofa: { group: 'Living', label: 'Sofa, 3 seats', short: 'Sofa', w: 2.0, d: 0.9, h: 0.8,
+    parts: [[0, 0.08, 0.05, 1.7, 0.34, 0.8, '#8c949c'], [0, 0.08, -0.36, 2, 0.72, 0.18, '#7d858d'],
+      [-0.92, 0.08, 0.05, 0.16, 0.5, 0.8, '#7d858d'], [0.92, 0.08, 0.05, 0.16, 0.5, 0.8, '#7d858d']],
+    plan: [[0, -0.36, 2, 0.18], [-0.92, 0.09, 0.16, 0.72], [0.92, 0.09, 0.16, 0.72]] },
+  table: { group: 'Living', label: 'Dining table', short: 'Table', w: 1.6, d: 0.9, h: 0.75,
+    parts: [[0, 0.71, 0, 1.6, 0.04, 0.9, OAK], ...[[-0.74, -0.39], [0.74, -0.39], [-0.74, 0.39], [0.74, 0.39]].map(([x, z]) => [x, 0, z, 0.06, 0.71, 0.06, OAK])] },
+};
+// SpecRite walnut timber slat acoustic panel, 2400 × 600 × 21 mm: veneer battens on black acoustic felt.
+// `wall: true` pieces hang on a wall: they snap flat against the nearest wall face when placed or dragged.
+FURN.slat = { group: 'Wall panels', label: 'SpecRite walnut slat acoustic panel', short: 'Slats', w: 0.6, d: 0.021, h: 2.4, wall: true,
+  parts: [[0, 0, -0.006, 0.6, 2.4, 0.009, '#232427'], ...Array.from({ length: 15 }, (_, i) => [-0.28 + i * 0.04, 0, 0.0045, 0.027, 2.4, 0.012, '#6f4e37'])] };
+// Moves a piece to point p. Wall pieces within reach of a wall turn to face the room and sit against it.
+function moveFurn(f, p) {
+  const h = FURN[f.kind].wall && nearestWall(p, 0.6);
+  if (!h) { f.x = r2(Math.round(p.x / 0.05) * 0.05); f.y = r2(Math.round(p.y / 0.05) * 0.05); return; }
+  const w = h.w, L = wlen(w), ux = (w.b.x - w.a.x) / L, uy = (w.b.y - w.a.y) / L, z = furnSize(f);
+  const along = clamp(Math.round(h.t * L / 0.05) * 0.05, 0, L), qx = w.a.x + ux * along, qy = w.a.y + uy * along;
+  const side = (p.x - qx) * -uy + (p.y - qy) * ux >= 0 ? 1 : -1, nx = -uy * side, ny = ux * side, off = S.thickness / 2 + z.d / 2 + 0.002;
+  f.x = Math.round((qx + nx * off) * 1000) / 1000; f.y = Math.round((qy + ny * off) * 1000) / 1000;
+  f.rot = r2(((Math.atan2(-nx, ny) * 180 / Math.PI) % 360 + 360) % 360);
+}
+const furn = () => S.furniture || (S.furniture = []);
+const cm = v => +(v * 100).toFixed(1);
+const furnSize = f => { const d = FURN[f.kind]; return { w: f.w || d.w, d: f.d || d.d, h: f.h || d.h }; };
+const selFurn = () => sel && sel.type === 'furn' ? furn().find(f => f.id === sel.id && FURN[f.kind]) : null;
+const furnHit = p => [...furn()].reverse().find(f => {
+  if (!FURN[f.kind]) return false;
+  const r = f.rot * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r), dx = p.x - f.x, dy = p.y - f.y, z = furnSize(f);
+  return Math.abs(dx * c + dy * sn) <= z.w / 2 && Math.abs(dy * c - dx * sn) <= Math.max(z.d / 2, px(7));
+});
+let furnKind = null;                               // catalog piece waiting to be placed
+HINTS.furniture = 'Pick a piece in the panel, then click on the plan to place it · <b>Esc</b> cancels';
+function drawFurn(f, mode) {                       // mode: 'ghost' (being placed), 'sel' or ''
+  const def = FURN[f.kind]; if (!def) return;
+  const z = furnSize(f), c = toS(f), k = view.s, kx = k * z.w / def.w, ky = k * z.d / def.d;
+  ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(f.rot * Math.PI / 180); ctx.globalAlpha = mode === 'ghost' ? 0.55 : 1; ctx.setLineDash([]);
+  if (mode === 'sel') { ctx.fillStyle = 'rgba(217,99,43,.25)'; ctx.fillRect(-z.w / 2 * k - 5, -z.d / 2 * k - 5, z.w * k + 10, z.d * k + 10); }
+  if (def.wall) {                                    // too thin to see at plan scale: a walnut strip just off the wall
+    const t = Math.max(z.d * k, 4);
+    ctx.fillStyle = mode === 'sel' ? '#d9632b' : '#6f4e37'; ctx.fillRect(-z.w / 2 * k + 0.5, -z.d / 2 * k, z.w * k - 1, t);
+    ctx.restore(); return;
+  }
+  ctx.fillStyle = '#f1e7d6'; ctx.strokeStyle = mode === 'sel' ? '#d9632b' : '#6b5d4d'; ctx.lineWidth = mode === 'sel' ? 2.5 : 1.3;
+  ctx.fillRect(-z.w / 2 * k, -z.d / 2 * k, z.w * k, z.d * k); ctx.strokeRect(-z.w / 2 * k, -z.d / 2 * k, z.w * k, z.d * k);
+  ctx.lineWidth = 1;
+  for (const [x, y, w, d] of def.plan || []) ctx.strokeRect((x - w / 2) * kx, (y - d / 2) * ky, w * kx, d * ky);
+  if (z.w * k > 44 && z.d * k > 16) {              // name, kept the right way up
+    const a = ((f.rot % 360) + 360) % 360; if (a > 90 && a <= 270) ctx.rotate(Math.PI);
+    ctx.font = '600 11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#4a4034';
+    ctx.fillText(def.short, 0, 0, z.w * k - 8);
+  }
+  ctx.restore();
+}
+function showCatalog() {                           // the Furniture tab: every piece that can be placed
+  const groups = [...new Set(Object.values(FURN).map(d => d.group))];
+  props.innerHTML = `<h4>Furniture</h4><div class="sub" style="margin-top:0">${furnKind ? 'Now click on the plan to place it.' : 'Pick a piece, then click on the plan to place it.'}</div>`
+    + groups.map(g => `<div class="sub">${g}</div><div class="flist">${Object.entries(FURN).filter(([, d]) => d.group === g).map(([k, d]) =>
+      `<button data-furn="${k}" class="${k === furnKind ? 'on' : ''}"><span>${d.label}</span><small>${cm(d.w)} × ${cm(d.d)} × ${cm(d.h)} cm</small></button>`).join('')}</div>`).join('');
+  props.style.display = 'block';
+  props.querySelectorAll('[data-furn]').forEach(b => b.onclick = () => { furnKind = b.dataset.furn; showProps(); draw(); });
+}
+function showFurnProps(f) {
+  const def = FURN[f.kind], z = furnSize(f);
+  const num = (name, k, v, step, unit) => `<div class="row">${name}<span><input type="number" data-f="${k}" value="${v}" step="${step}"> ${unit}</span></div>`;
+  props.innerHTML = `<h4>${esc(def.label)}</h4>` + num('Width', 'w', z.w, 0.01, 'm') + num('Depth', 'd', z.d, 0.01, 'm') + num('Height', 'h', z.h, 0.01, 'm')
+    + num('Rotation', 'rot', f.rot, 15, '°')
+    + `<div class="chips"><button id="rot90">Rotate 90°<kbd>R</kbd></button><button id="dup">${def.wall ? 'Add next along wall' : 'Duplicate'}</button>${f.w || f.d || f.h ? '<button id="fsize">Reset size</button>' : ''}</div>
+    <button class="del">Delete furniture</button>`;
+  props.style.display = 'block';
+  const edit = patch => { commit(); Object.assign(f, patch); changed(); showProps(); };
+  props.querySelectorAll('input[type=number]').forEach(inp => inp.onchange = () => {
+    const v = parseFloat(inp.value), k = inp.dataset.f;
+    if (isNaN(v)) return showProps();
+    edit(k === 'rot' ? { rot: ((v % 360) + 360) % 360 } : { [k]: r2(clamp(v, 0.05, 6)) });
+  });
+  props.querySelector('#rot90').onclick = () => edit({ rot: (f.rot + 90) % 360 });
+  props.querySelector('#dup').onclick = () => {
+    commit(); const a = f.rot * Math.PI / 180, c = def.wall ? { ...f, id: nid(), x: f.x + Math.cos(a) * z.w, y: f.y + Math.sin(a) * z.w } : { ...f, id: nid(), x: r2(f.x + 0.3), y: r2(f.y + 0.3) }; furn().push(c); sel = { type: 'furn', id: c.id }; changed(); showProps();
+  };
+  const fs = props.querySelector('#fsize'); if (fs) fs.onclick = () => { commit(); delete f.w; delete f.d; delete f.h; changed(); showProps(); };
+  props.querySelector('.del').onclick = deleteSelection;
+}
 function areaVertexHit(p) { const a = selArea(); return a && a.pts.find(v => dist(p, v) < px(9)); }
 
 const toS = p => ({ x: p.x * view.s + view.ox, y: p.y * view.s + view.oy });
@@ -515,15 +638,19 @@ function hitTest(p) {
     if (q.d < S.thickness / 2 + px(6) && Math.abs(along - o.pos) <= o.width / 2) return { type: 'opening', o };
   }
   for (const w of S.walls) for (const e of [w.a, w.b]) if (dist(p, e) < px(9)) return { type: 'node', p: e };
+  const wf = furnHit(p); if (wf && FURN[wf.kind].wall && nearestWall(p, S.thickness / 2) == null) return { type: 'furn', f: wf };
   const h = nearestWall(p, Math.max(S.thickness / 2, px(7)));
   if (h) return { type: 'wall', w: h.w };
+  const fu = furnHit(p); if (fu) return { type: 'furn', f: fu };
   const st = stairHit(p);
   return st ? { type: 'stair', st } : null;
 }
 const endpointsAt = keys => S.walls.flatMap(w => [w.a, w.b]).filter(e => keys.includes(key(e)));
 
 function setTool(t) {
+  const cat = (tool === 'furniture') !== (t === 'furniture');   // the catalog panel opens / closes with the Furniture tool
   tool = t; chain = null; poly = null;
+  if (cat) { furnKind = null; if (t === 'furniture') sel = null; showProps(); }
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   document.getElementById('hint').innerHTML = HINTS[t];
   cv.style.cursor = t === 'select' ? 'default' : 'crosshair';
@@ -549,6 +676,12 @@ cv.addEventListener('pointerdown', e => {
     const p = snapPoint(m), st = mkStair({ x: p.x, y: p.y });
     commit(); stairs().push(st); sel = { type: 'stair', id: st.id };
     setTool('select'); changed(); showProps();
+  } else if (tool === 'furniture') {
+    if (furnKind) {
+      commit();
+      const f = { id: nid(), kind: furnKind, x: 0, y: 0, rot: 0 };
+      moveFurn(f, m); furn().push(f); setTool('select'); sel = { type: 'furn', id: f.id }; changed(); showProps();
+    }
   } else if (AREA[tool]) {
     const p = snapArea(m);
     if (!poly) poly = [p];
@@ -567,6 +700,7 @@ cv.addEventListener('pointerdown', e => {
     const av = areaVertexHit(m), h = av ? { type: 'avertex' } : hitTest(m);
     if (av) drag = { type: 'node', pts: [av], ex: new Set() };
     else if (!h) { sel = null; pan(); drag.pick = m; }   // a click without dragging selects the room/area under it
+    else if (h.type === 'furn') { sel = { type: 'furn', id: h.f.id }; drag = { type: FURN[h.f.kind].wall ? 'wallfurn' : 'stair', st: h.f, ox: h.f.x, oy: h.f.y, start: m }; }   // moves like stairs
     else if (h.type === 'stair') { sel = { type: 'stair', id: h.st.id }; drag = { type: 'stair', st: h.st, ox: h.st.x, oy: h.st.y, start: m }; }
     else if (h.type === 'opening') { sel = { type: 'opening', id: h.o.id }; if (sel3 && sel3.kind === 'door') sel3 = null;   // one picked door at a time
       drag = { type: 'opening', o: h.o }; }
@@ -592,6 +726,7 @@ cv.addEventListener('pointermove', e => {
       if (drag.type === 'stair') {
         drag.st.x = r2(drag.ox + Math.round((m.x - drag.start.x) / 0.05) * 0.05);
         drag.st.y = r2(drag.oy + Math.round((m.y - drag.start.y) / 0.05) * 0.05);
+      } else if (drag.type === 'wallfurn') { moveFurn(drag.st, m);
       } else if (drag.type === 'node') { const p = snapPoint(m, drag.ex); for (const q of drag.pts) { q.x = p.x; q.y = p.y; } }
       else if (drag.type === 'wall') {
         const dx = Math.round((m.x - drag.start.x) / GRID) * GRID, dy = Math.round((m.y - drag.start.y) / GRID) * GRID;
@@ -631,6 +766,7 @@ function deleteSelection() {
   if (sel.type === 'wall') { S.walls = S.walls.filter(w => w.id !== sel.id); S.openings = S.openings.filter(o => o.wallId !== sel.id); }
   else if (sel.type === 'area') S.areas = areas().filter(a => a.id !== sel.id);
   else if (sel.type === 'stair') S.stairs = stairs().filter(s => s.id !== sel.id);
+  else if (sel.type === 'furn') S.furniture = furn().filter(f => f.id !== sel.id);
   else S.openings = S.openings.filter(o => o.id !== sel.id);
   sel = null; changed(); showProps();
 }
@@ -641,7 +777,8 @@ window.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); e.shiftKey ? restore(redoStack, undoStack) : restore(undoStack, redoStack); }
   else if ((e.ctrlKey || e.metaKey) && k === 'y') { e.preventDefault(); restore(redoStack, undoStack); }
   else if (e.ctrlKey || e.metaKey) return;
-  else if (k === 'escape') { chain = null; poly = null; sel = null; showProps(); draw(); }
+  else if (k === 'escape') { chain = null; poly = null; sel = null; if (tool === 'furniture') setTool('select'); showProps(); draw(); }
+  else if (k === 'r' && selFurn()) { const f = selFurn(); commit(); f.rot = (f.rot + 90) % 360; changed(); showProps(); }
   else if (k === 'enter' && poly) finishArea();
   else if (k === 'delete' || k === 'backspace') deleteSelection();
   else if (k === 'v') setTool('select'); else if (k === 'w') setTool('wall');
@@ -738,6 +875,7 @@ function draw() {
   // stairs: arriving from the floor below (dashed), then this floor's own
   for (const st of stairsBelow) drawStair(st, below.height + SLAB, 'ghost');
   for (const st of stairs()) drawStair(st, S.height + SLAB, sel && sel.type === 'stair' && sel.id === st.id ? 'sel' : '');
+  for (const f of furn()) drawFurn(f, sel && sel.type === 'furn' && sel.id === f.id ? 'sel' : '');
   // walls
   ctx.lineCap = 'round'; ctx.lineWidth = Math.max(2, S.thickness * view.s);
   for (const w of S.walls) {
@@ -1035,6 +1173,7 @@ function showProps() {
 }
 let sideShift = 0, sideOpen = false;
 function renderProps() {
+  if (tool === 'furniture') return showCatalog();
   const room = selectedRoom();
   if (room) return showRoomProps(room);
   if (sel && sel.type === 'room') sel = null;
@@ -1044,6 +1183,9 @@ function renderProps() {
   const stair = selStair();
   if (stair) return showStairProps(stair);
   if (sel && sel.type === 'stair') sel = null;
+  const fu = selFurn();
+  if (fu) return showFurnProps(fu);
+  if (sel && sel.type === 'furn') sel = null;
   const o = sel && sel.type === 'opening' && S.openings.find(x => x.id === sel.id);
   const w = sel && sel.type === 'wall' && wallById(sel.id);
   if (!o && !w) { props.style.display = 'none'; return; }
@@ -1353,6 +1495,18 @@ function buildFloor(S, rooms, level, below) {
         post.position.set(st.x, (rise + 0.9) / 2, st.y); post.castShadow = true; model.add(post);
       }
     }
+    // furniture: each catalog piece is a handful of boxes, scaled to the size set in its panel
+    for (const f of S.furniture || []) {
+      const def = FURN[f.kind]; if (!def) continue;
+      const z = furnSize(f), fg = new THREE.Group(), picked = level === P.active && !!sel && sel.type === 'furn' && sel.id === f.id;
+      for (const [x, y, zz, w, h, d, color] of def.parts) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), picked ? glow(doorMat(color)) : doorMat(color));
+        m.position.set(x, y + h / 2, zz); m.castShadow = m.receiveShadow = true; fg.add(m);
+      }
+      fg.scale.set(z.w / def.w, z.h / def.h, z.d / def.d);
+      fg.position.set(f.x, 0.002, f.y); fg.rotation.y = -f.rot * Math.PI / 180;   // plan y runs along 3D z, so the turn is mirrored
+      fg.userData.furn = { floor: level, id: f.id }; model.add(fg);
+    }
     return model;
   })(new THREE.Group());
 }
@@ -1368,6 +1522,12 @@ c3.addEventListener('pointerup', e => {                // a click, not the end o
   ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera);
   const up = (o, k) => { while (o && !o.userData[k]) o = o.parent; return o; };
   const hit = ray.intersectObject(model, true).find(h => up(h.object, 'door') || h.object.material !== M.glass);   // look through window glass
+  const fu = hit && up(hit.object, 'furn');
+  if (fu) {                                            // furniture is edited in the plan's panel: select it there
+    const u = fu.userData.furn; if (u.floor !== P.active) setFloor(u.floor);
+    if (tool === 'furniture') setTool('select');
+    sel = { type: 'furn', id: u.id }; sel3 = null; showProps(); draw(); return;
+  }
   const d = hit && up(hit.object, 'door'), g = hit && up(hit.object, 'wall');
   if (d) { sel3 = { kind: 'door', ...d.userData.door }; if (sel && sel.type === 'opening') { sel = null; showProps(); } }   // one picked door at a time
   else if (g) {
@@ -1491,7 +1651,7 @@ document.getElementById('fit').onclick = fit3D;
 document.getElementById('allFloors').onclick = e => {
   showAll = !showAll; dirty3d = true; e.target.textContent = showAll ? 'Showing all floors' : 'Showing up to this floor';
 };
-document.getElementById('clear').onclick = () => { commit(); S.walls = []; S.openings = []; S.areas = []; S.rooms = []; S.stairs = []; sel = null; changed(); showProps(); setTool('wall'); };
+document.getElementById('clear').onclick = () => { commit(); S.walls = []; S.openings = []; S.areas = []; S.rooms = []; S.stairs = []; S.furniture = []; sel = null; changed(); showProps(); setTool('wall'); };
 document.getElementById('export').onclick = () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(P, null, 2)], { type: 'application/json' }));
